@@ -1,16 +1,17 @@
 import asyncio
 
-from aioconsole import ainput
-
-from src.browser.controller import close_browser, launch_browser
+from src.browser.controller import close_browser, launch_browser, wait_for_page_ready
+from src.parser.page_parser import extract_page_state
 
 
 async def main() -> None:
     print("AI Browser Agent starting...")
     playwright, context, page = await launch_browser()
     try:
-        print(f"Browser opened. Current URL: {page.url}")
-        await ainput("Press Enter to close...")
+        await page.goto("https://www.google.com")
+        await wait_for_page_ready(page)
+        state = await extract_page_state(page)
+        print(state.content)
     finally:
         await close_browser(context, playwright)
 

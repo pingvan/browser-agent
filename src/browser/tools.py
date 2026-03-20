@@ -22,7 +22,7 @@ _NAVIGATION_KEYS: frozenset[str] = frozenset(
 
 async def execute_tool(
     name: str, args: dict, page: Page, context: BrowserContext
-) -> tuple[dict | str, Page]:
+) -> tuple[dict, Page]:
     global _last_page_state
     active_page: Page = page
 
@@ -49,7 +49,7 @@ async def execute_tool(
         case "go_back":
             try:
                 _last_page_state = None
-                result = await page.go_back(timeout=10000, wait_until="domcontentloaded")
+                result = await page.go_back(timeout=10000)
                 if result is None:
                     return {
                         "success": False,
@@ -102,8 +102,8 @@ async def execute_tool(
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.fill(text)
-                _last_page_state = None
                 if press_enter:
+                    _last_page_state = None
                     await page.keyboard.press("Enter")
                     await wait_for_page_ready(page)
                 return {
@@ -149,6 +149,7 @@ async def execute_tool(
                 await page.keyboard.press(key)
                 if key in _NAVIGATION_KEYS:
                     _last_page_state = None
+                    await wait_for_page_ready(page)
                 return {"success": True}, active_page
             except Exception as e:
                 return {"success": False, "error": str(e)}, active_page

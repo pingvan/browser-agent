@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 *.pyc
 .ruff_cache/
+screenshot_test.jpg

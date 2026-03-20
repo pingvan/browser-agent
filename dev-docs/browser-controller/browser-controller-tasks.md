@@ -29,8 +29,8 @@
 - [x] `await close_browser(context, playwright)`
 - [x] Run `uv run ruff check src/ --fix && uv run ruff format src/` — 0 errors
 - [x] Run `uv run pyright src/` — 0 errors
-- [ ] **Manual test 1**: `uv run python -m src.main` → Chromium opens, URL printed, Enter closes cleanly
-- [ ] **Manual test 2**: navigate to any site manually → press Enter → browser closes
+- [x] **Manual test 1**: `uv run python -m src.main` → Chromium opens, URL printed, Enter closes cleanly
+- [x] **Manual test 2**: navigate to any site manually → press Enter → browser closes
 - [ ] **Manual test 3**: run again → cookies/session from previous run are preserved
 - [ ] Mark all Definition of Done items in plan as complete
 - [ ] Commit: `feat: implement browser controller (launch, wait_for_page_ready, close)`

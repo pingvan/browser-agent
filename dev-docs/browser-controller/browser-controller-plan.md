@@ -91,6 +91,6 @@ if __name__ == "__main__":
 - [ ] Terminal prints `Browser opened. Current URL: <url>`
 - [ ] Pressing Enter closes browser and exits process cleanly
 - [ ] Second run after manual browsing retains cookies/session (`.browser-data/` persisted)
-- [ ] `uv run ruff check src/` → 0 errors
-- [ ] `uv run ruff format src/ --check` → 0 errors
-- [ ] `uv run pyright src/` → 0 errors
+- [x] `uv run ruff check src/` → 0 errors
+- [x] `uv run ruff format src/ --check` → 0 errors
+- [x] `uv run pyright src/` → 0 errors

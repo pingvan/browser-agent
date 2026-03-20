@@ -1,5 +1,6 @@
-# Browser Tools: execute_tool() — all 13 browser tools implementation
+# Browser Tools: execute_tool() — implementation of all 13 browser tools
 import base64
+from typing import Any
 
 from playwright.async_api import BrowserContext, Page
 
@@ -7,24 +8,58 @@ from src.browser.controller import wait_for_page_ready
 from src.parser.page_parser import PageState, extract_page_state
 
 # Updated by get_page_state, invalidated by navigation-like tools.
-# Read by src.security.security_layer via get_last_page_state().
-_last_page_state: PageState | None = None
+# Read by callers via get_last_page_state().
+_page_states: dict[int, PageState] = {}
 
 
-def get_last_page_state() -> PageState | None:
-    return _last_page_state
+def get_last_page_state(page: Page) -> PageState | None:
+    """Return the cached PageState for the given page, or None if stale/missing."""
+    return _page_states.get(id(page))
+
+
+def _invalidate(page: Page) -> None:
+    """Remove cached page state for *page* (marks it as stale)."""
+    _page_states.pop(id(page), None)
 
 
 _NAVIGATION_KEYS: frozenset[str] = frozenset(
     {"Enter", "Return", "F5", "Alt+ArrowLeft", "Alt+ArrowRight"}
 )
 
+# Required args per tool (key = tool name, value = list of required arg names).
+_REQUIRED_ARGS: dict[str, list[str]] = {
+    "navigate": ["url"],
+    "click": ["ref"],
+    "type_text": ["ref", "text"],
+    "select_option": ["ref", "value"],
+    "hover": ["ref"],
+    "press_key": ["key"],
+    "scroll": ["direction"],
+    "switch_tab": ["index"],
+    "done": ["summary"],
+}
+
+
+def _validate_args(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Return an error dict if required args are missing, else None."""
+    required = _REQUIRED_ARGS.get(name, [])
+    missing = [k for k in required if k not in args]
+    if missing:
+        return {
+            "success": False,
+            "error": f"Missing required argument(s) for '{name}': {', '.join(missing)}",
+        }
+    return None
+
 
 async def execute_tool(
     name: str, args: dict, page: Page, context: BrowserContext
 ) -> tuple[dict, Page]:
-    global _last_page_state
     active_page: Page = page
+
+    # Validate required args upfront — gives clear errors instead of KeyError.
+    if err := _validate_args(name, args):
+        return err, active_page
 
     match name:
         case "navigate":
@@ -35,7 +70,7 @@ async def execute_tool(
                         "success": False,
                         "error": f"Unsupported URL scheme: {url!r}. Only http/https allowed.",
                     }, active_page
-                _last_page_state = None
+                _invalidate(page)
                 await page.goto(url)
                 await wait_for_page_ready(page)
                 return {
@@ -48,7 +83,7 @@ async def execute_tool(
 
         case "go_back":
             try:
-                _last_page_state = None
+                _invalidate(page)
                 result = await page.go_back(timeout=10000)
                 if result is None:
                     return {
@@ -63,7 +98,7 @@ async def execute_tool(
         case "get_page_state":
             try:
                 state = await extract_page_state(page)
-                _last_page_state = state
+                _page_states[id(page)] = state
                 return {"success": True, "content": state.content}, active_page
             except Exception as e:
                 return {
@@ -85,7 +120,7 @@ async def execute_tool(
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.click()
-                _last_page_state = None
+                _invalidate(page)
                 await wait_for_page_ready(page)
                 return {
                     "success": True,
@@ -103,7 +138,7 @@ async def execute_tool(
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.fill(text)
                 if press_enter:
-                    _last_page_state = None
+                    _invalidate(page)
                     await page.keyboard.press("Enter")
                     await wait_for_page_ready(page)
                 return {
@@ -120,7 +155,7 @@ async def execute_tool(
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.select_option(value)
-                _last_page_state = None
+                _invalidate(page)
                 await wait_for_page_ready(page)
                 return {
                     "success": True,
@@ -135,7 +170,7 @@ async def execute_tool(
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.hover()
-                _last_page_state = None
+                _invalidate(page)
                 return {
                     "success": True,
                     "description": f"Hovered over [{ref}]",
@@ -148,7 +183,7 @@ async def execute_tool(
                 key: str = args["key"]
                 await page.keyboard.press(key)
                 if key in _NAVIGATION_KEYS:
-                    _last_page_state = None
+                    _invalidate(page)
                     await wait_for_page_ready(page)
                 return {"success": True}, active_page
             except Exception as e:
@@ -205,7 +240,7 @@ async def execute_tool(
                         "error": f"Tab index {index} out of range",
                     }, active_page
                 target = pages[index]
-                _last_page_state = None
+                _invalidate(page)
                 await target.bring_to_front()
                 active_page = target
                 return {

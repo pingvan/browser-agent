@@ -6,8 +6,13 @@ from playwright.async_api import BrowserContext, Page
 from src.browser.controller import wait_for_page_ready
 from src.parser.page_parser import PageState, extract_page_state
 
-# Read by src.security.security_layer to inspect current page without an extra tool call
+# Updated by get_page_state, invalidated by navigation-like tools.
+# Read by src.security.security_layer via get_last_page_state().
 _last_page_state: PageState | None = None
+
+
+def get_last_page_state() -> PageState | None:
+    return _last_page_state
 
 
 async def execute_tool(name: str, args: dict, page: Page, context: BrowserContext) -> dict | str:
@@ -22,6 +27,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                         "success": False,
                         "error": f"Unsupported URL scheme: {url!r}. Only http/https allowed.",
                     }
+                _last_page_state = None
                 await page.goto(url)
                 await wait_for_page_ready(page)
                 return {"success": True, "url": page.url, "title": await page.title()}
@@ -33,6 +39,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 result = await page.go_back()
                 if result is None:
                     return {"success": False, "error": "No previous page in history"}
+                _last_page_state = None
                 await wait_for_page_ready(page)
                 return {"success": True, "url": page.url}
             except Exception as e:
@@ -61,6 +68,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.click()
+                _last_page_state = None
                 if page.url != url_before:
                     await wait_for_page_ready(page)
                 return {"success": True, "description": f"Clicked element [{ref}]"}
@@ -151,7 +159,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                             "active": p is page,
                         }
                     )
-                return {"tabs": tabs}
+                return {"success": True, "tabs": tabs}
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -162,6 +170,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 if index < 0 or index >= len(pages):
                     return {"success": False, "error": f"Tab index {index} out of range"}
                 target = pages[index]
+                _last_page_state = None
                 await target.bring_to_front()
                 # Caller must update its page reference: page = context.pages[index]
                 return {

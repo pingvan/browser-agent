@@ -2,9 +2,8 @@ import asyncio
 import base64
 from pathlib import Path
 
-from src.browser import tools
 from src.browser.controller import close_browser, launch_browser
-from src.browser.tools import execute_tool
+from src.browser.tools import execute_tool, get_last_page_state
 
 
 async def main() -> None:
@@ -21,8 +20,9 @@ async def main() -> None:
 
         # find search input dynamically from the parsed elements
         search_ref: int | None = None
-        if tools._last_page_state is not None:
-            for el in tools._last_page_state.elements:
+        last_state = get_last_page_state()
+        if last_state is not None:
+            for el in last_state.elements:
                 if el.role == "combobox" or el.input_type in ("search", "text"):
                     search_ref = el.ref
                     break

@@ -1,17 +1,14 @@
 import asyncio
 
-from src.browser.controller import close_browser, launch_browser, wait_for_page_ready
-from src.parser.page_parser import extract_page_state
+from src.browser.controller import close_browser, launch_browser
 
 
 async def main() -> None:
     print("AI Browser Agent starting...")
-    playwright, context, page = await launch_browser()
+    playwright, context, _ = await launch_browser()
     try:
-        await page.goto("https://www.google.com")
-        await wait_for_page_ready(page)
-        state = await extract_page_state(page)
-        print(state.content)
+        print("Browser launched. CLI not yet implemented.")
+        # TODO: run_cli(page, context) once cli.py is implemented
     finally:
         await close_browser(context, playwright)
 

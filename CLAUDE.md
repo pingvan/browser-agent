@@ -174,6 +174,11 @@ Visible text from the page, truncated to ~2000 chars...
 - **Never use pip or requirements.txt** — all deps managed through `uv add` / `pyproject.toml`
 
 
+## Tests & Linter Rules
+
+- **Never modify tests or linter/formatter configuration** (ruff settings, pyright config, ci.yml) to make them pass — fix the actual code instead
+- **In extreme cases**, if you genuinely believe a rule/test needs to be changed, **always ask the user for explicit confirmation** before touching it
+
 ## Dev Docs Rules
 - When working on a task that has dev-docs (dev-docs/[task-name]/), ALWAYS read the tasks file before starting work.
 - After completing each task, IMMEDIATELY mark it as done: change `- [ ]` to `- [x]` in the tasks file.

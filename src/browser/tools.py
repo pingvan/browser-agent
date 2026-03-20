@@ -6,6 +6,7 @@ from playwright.async_api import BrowserContext, Page
 from src.browser.controller import wait_for_page_ready
 from src.parser.page_parser import PageState, extract_page_state
 
+# Read by src.security.security_layer to inspect current page without an extra tool call
 _last_page_state: PageState | None = None
 
 
@@ -16,6 +17,11 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
         case "navigate":
             try:
                 url: str = args["url"]
+                if not url.startswith(("http://", "https://")):
+                    return {
+                        "success": False,
+                        "error": f"Unsupported URL scheme: {url!r}. Only http/https allowed.",
+                    }
                 await page.goto(url)
                 await wait_for_page_ready(page)
                 return {"success": True, "url": page.url, "title": await page.title()}
@@ -38,13 +44,13 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 _last_page_state = state
                 return state.content
             except Exception as e:
-                return {"success": False, "error": str(e)}
+                return f"Error extracting page state: {e}"
 
         case "screenshot":
             try:
                 data = await page.screenshot(type="jpeg", quality=75)
                 encoded = base64.b64encode(data).decode()
-                return {"base64_image": encoded}
+                return {"success": True, "base64_image": encoded}
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -72,7 +78,10 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 if press_enter:
                     await page.keyboard.press("Enter")
                     await wait_for_page_ready(page)
-                return {"success": True, "description": f"Typed into [{ref}]: {text!r}"}
+                return {
+                    "success": True,
+                    "description": f"Typed {len(text)} characters into [{ref}]",
+                }
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
@@ -108,9 +117,23 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
         case "scroll":
             try:
                 direction: str = args["direction"]
-                amount: int = args.get("amount", 500)
+                if direction not in ("up", "down"):
+                    return {
+                        "success": False,
+                        "error": f"Invalid scroll direction: {direction!r}. Use 'up' or 'down'.",
+                    }
+                raw_amount = args.get("amount", 500)
+                try:
+                    amount = int(raw_amount)
+                except (TypeError, ValueError):
+                    return {
+                        "success": False,
+                        "error": f"Invalid scroll amount: {raw_amount!r} (expected integer)",
+                    }
+                if amount < 0:
+                    amount = abs(amount)
                 delta = amount if direction == "down" else -amount
-                await page.evaluate(f"window.scrollBy(0, {delta})")
+                await page.evaluate("(delta) => window.scrollBy(0, delta)", delta)
                 scroll_y: int = await page.evaluate("window.scrollY")
                 return {"success": True, "scroll_y": scroll_y}
             except Exception as e:
@@ -140,7 +163,13 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                     return {"success": False, "error": f"Tab index {index} out of range"}
                 target = pages[index]
                 await target.bring_to_front()
-                return {"success": True, "url": target.url, "title": await target.title()}
+                # Caller must update its page reference: page = context.pages[index]
+                return {
+                    "success": True,
+                    "index": index,
+                    "url": target.url,
+                    "title": await target.title(),
+                }
             except Exception as e:
                 return {"success": False, "error": str(e)}
 

@@ -1,6 +1,7 @@
 # Browser Tools: execute_tool() — implementation of all 13 browser tools
 import base64
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from playwright.async_api import BrowserContext, Page
 
@@ -9,17 +10,17 @@ from src.parser.page_parser import PageState, extract_page_state
 
 # Updated by get_page_state, invalidated by navigation-like tools.
 # Read by callers via get_last_page_state().
-_page_states: dict[int, PageState] = {}
+_page_states: WeakKeyDictionary[Page, PageState] = WeakKeyDictionary()
 
 
 def get_last_page_state(page: Page) -> PageState | None:
     """Return the cached PageState for the given page, or None if stale/missing."""
-    return _page_states.get(id(page))
+    return _page_states.get(page)
 
 
 def _invalidate(page: Page) -> None:
     """Remove cached page state for *page* (marks it as stale)."""
-    _page_states.pop(id(page), None)
+    _page_states.pop(page, None)
 
 
 _NAVIGATION_KEYS: frozenset[str] = frozenset(
@@ -53,8 +54,8 @@ def _validate_args(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def execute_tool(
-    name: str, args: dict, page: Page, context: BrowserContext
-) -> tuple[dict, Page]:
+    name: str, args: dict[str, Any], page: Page, context: BrowserContext
+) -> tuple[dict[str, Any], Page]:
     active_page: Page = page
 
     # Validate required args upfront — gives clear errors instead of KeyError.
@@ -98,7 +99,7 @@ async def execute_tool(
         case "get_page_state":
             try:
                 state = await extract_page_state(page)
-                _page_states[id(page)] = state
+                _page_states[page] = state
                 return {"success": True, "content": state.content}, active_page
             except Exception as e:
                 return {

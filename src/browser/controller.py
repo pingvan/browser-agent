@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Download, Page, Playwright, async_playwright
+from playwright.async_api import Error as PlaywrightError
 
 
 async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
@@ -18,20 +19,21 @@ async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
 
     page = context.pages[0] if context.pages else await context.new_page()
 
-    page.on("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+    page.on("dialog", lambda dialog: asyncio.create_task(dialog.accept()))
 
-    async def _on_download(download: Download) -> None:
-        await download.save_as(Path("./downloads") / download.suggested_filename)
+    def _on_download(download: Download) -> None:
+        safe_name = Path(download.suggested_filename).name
+        asyncio.create_task(download.save_as(Path("./downloads") / safe_name))
 
     context.on("download", _on_download)  # type: ignore[call-overload]
 
     return playwright, context, page
 
 
-async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
+async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:  # noqa: ASYNC109
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=timeout)
-    except Exception:
+    except PlaywrightError:
         pass
 
     try:
@@ -48,13 +50,10 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
                 stable_count = 0
                 prev_length = length
             await asyncio.sleep(0.2)
-    except Exception:
+    except PlaywrightError:
         pass
 
-    try:
-        await asyncio.sleep(0.3)
-    except Exception:
-        pass
+    await asyncio.sleep(0.3)
 
 
 async def close_browser(context: BrowserContext, playwright: Playwright) -> None:

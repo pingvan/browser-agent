@@ -1,0 +1,7 @@
+.browser-data/
+downloads/
+__pycache__/
+.env
+.venv/
+*.pyc
+.ruff_cache/

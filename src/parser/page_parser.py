@@ -105,8 +105,11 @@ _JS_EXTRACT_TEXT = """
         }
         if (skip) continue;
         if (node.parentElement && node.parentElement.offsetParent === null) continue;
-        fragments.push(text);
-        total += text.length + 3;
+        const remaining = 4000 - total;
+        if (remaining <= 0) break;
+        const chunk = text.length <= remaining ? text : text.slice(0, remaining);
+        fragments.push(chunk);
+        total += chunk.length + 3;
         if (total >= 4000) break;
     }
     return fragments.join(' | ');

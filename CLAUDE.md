@@ -172,3 +172,12 @@ Visible text from the page, truncated to ~2000 chars...
 - **Use ensure_ascii=False** in json.dumps for Russian text
 - **Run `uv run ruff check src/ --fix && uv run ruff format src/`** before committing
 - **Never use pip or requirements.txt** — all deps managed through `uv add` / `pyproject.toml`
+
+
+## Dev Docs Rules
+- When working on a task that has dev-docs (dev-docs/[task-name]/), ALWAYS read the tasks file before starting work.
+- After completing each task, IMMEDIATELY mark it as done: change `- [ ]` to `- [x]` in the tasks file.
+- After completing a stage, update the context file: add any new decisions to the "Technical Decisions Log" section.
+- If the plan changes during implementation, update the plan file to reflect the new approach.
+- Before committing, verify that all completed tasks are checked off in the tasks file.
+- When starting a new session, read all three dev-docs files to restore context.

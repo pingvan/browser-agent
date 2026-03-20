@@ -36,10 +36,10 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
 
         case "go_back":
             try:
-                result = await page.go_back()
+                _last_page_state = None
+                result = await page.go_back(timeout=10000, wait_until="domcontentloaded")
                 if result is None:
                     return {"success": False, "error": "No previous page in history"}
-                _last_page_state = None
                 await wait_for_page_ready(page)
                 return {"success": True, "url": page.url}
             except Exception as e:
@@ -64,13 +64,11 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
         case "click":
             try:
                 ref: int = args["ref"]
-                url_before = page.url
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.click()
                 _last_page_state = None
-                if page.url != url_before:
-                    await wait_for_page_ready(page)
+                await wait_for_page_ready(page)
                 return {"success": True, "description": f"Clicked element [{ref}]"}
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -83,6 +81,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.fill(text)
+                _last_page_state = None
                 if press_enter:
                     await page.keyboard.press("Enter")
                     await wait_for_page_ready(page)
@@ -100,6 +99,8 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
                 locator = page.locator(f'[data-agent-ref="{ref}"]')
                 await locator.wait_for(state="visible", timeout=5000)
                 await locator.select_option(value)
+                _last_page_state = None
+                await wait_for_page_ready(page)
                 return {"success": True, "description": f"Selected [{ref}]: {value!r}"}
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -118,6 +119,7 @@ async def execute_tool(name: str, args: dict, page: Page, context: BrowserContex
             try:
                 key: str = args["key"]
                 await page.keyboard.press(key)
+                _last_page_state = None
                 return {"success": True}
             except Exception as e:
                 return {"success": False, "error": str(e)}

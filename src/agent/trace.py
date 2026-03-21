@@ -59,9 +59,7 @@ def format_model_note(content: str | None) -> str | None:
     return note or None
 
 
-def format_tool_arguments(
-    fn_name: str, args: dict[str, Any], page_state: PageState | None
-) -> str:
+def format_tool_arguments(fn_name: str, args: dict[str, Any], page_state: PageState | None) -> str:
     safe_args = dict(args)
 
     if fn_name == "type_text" and "text" in safe_args:
@@ -118,7 +116,7 @@ def summarize_result(fn_name: str, result: dict[str, Any]) -> str:
         return "no structured result"
 
     if cleaned.get("success") is False and "error" in cleaned:
-        return f'failed: {_truncate(str(cleaned["error"]), 220)}'
+        return f"failed: {_truncate(str(cleaned['error']), 220)}"
 
     return _truncate(json.dumps(cleaned, ensure_ascii=False, sort_keys=True), 240)
 
@@ -173,4 +171,3 @@ def build_step_result_log(
         if page_snapshot:
             lines.append(f"Page: {page_snapshot}")
     return "\n".join(lines)
-

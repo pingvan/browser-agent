@@ -2,6 +2,8 @@ import re
 from typing import Any
 
 MAX_MESSAGES = 40
+
+
 class ContextManager:
     MAX_SCREENSHOTS_KEPT = 1
 

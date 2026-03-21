@@ -12,6 +12,7 @@ async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
     context = await playwright.chromium.launch_persistent_context(
         ".browser-data",
         headless=False,
+        handle_sigint=False,
         viewport={"width": 1280, "height": 900},
         locale="ru-RU",
         args=["--disable-blink-features=AutomationControlled"],
@@ -57,5 +58,11 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:  # noqa
 
 
 async def close_browser(context: BrowserContext, playwright: Playwright) -> None:
-    await context.close()
-    await playwright.stop()
+    try:
+        await context.close()
+    except Exception:
+        pass
+    try:
+        await playwright.stop()
+    except Exception:
+        pass

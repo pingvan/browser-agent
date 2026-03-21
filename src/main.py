@@ -1,14 +1,21 @@
 import asyncio
 
+from dotenv import load_dotenv
+
+from src.agent.core import run_agent
 from src.browser.controller import close_browser, launch_browser
 
 
 async def main() -> None:
+    load_dotenv()
     print("AI Browser Agent starting...")
-    playwright, context, _ = await launch_browser()
+    playwright, context, page = await launch_browser()
     try:
-        print("Browser launched. CLI not yet implemented.")
-        # TODO: run_cli(page, context) once cli.py is implemented
+        result = await run_agent(
+            "открой google.com и найди погоду в москве на сегодня", page, context
+        )
+        print(result)
+        await asyncio.sleep(10)
     finally:
         await close_browser(context, playwright)
 

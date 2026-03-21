@@ -9,7 +9,10 @@ TOOLS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "Full URL including https://"},
+                    "url": {
+                        "type": "string",
+                        "description": "Full URL starting with http:// or https://",
+                    },
                 },
                 "required": ["url"],
             },

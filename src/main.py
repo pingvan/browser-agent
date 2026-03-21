@@ -11,7 +11,10 @@ async def main() -> None:
     print("AI Browser Agent starting...")
     playwright, context, page = await launch_browser()
     try:
-        await run_agent("открой google.com и найди погоду в москве на сегодня", page, context)
+        result = await run_agent(
+            "открой google.com и найди погоду в москве на сегодня", page, context
+        )
+        print(result)
         await asyncio.sleep(10)
     finally:
         await close_browser(context, playwright)

@@ -18,10 +18,8 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
     client = AsyncOpenAI()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": f"Task: {task}\n\nStart by calling get_page_state to see the current page.",
-        },
+        {"role": "system", "content": "Start by calling get_page_state to see the current page."},
+        {"role": "user", "content": task},
     ]
 
     step = 0
@@ -37,7 +35,7 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
                 max_tokens=4096,
             )
         except Exception as e:
-            return f"API error: {e}"
+            return json.dumps({"error": "OpenAIAPIError", "message": str(e)}, ensure_ascii=False)
         message = response.choices[0].message
         messages.append({k: v for k, v in message.model_dump().items() if v is not None})
 
@@ -81,7 +79,10 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
             result, page = await execute_tool(fn_name, fn_args, page, context)
 
             tool_content = (
-                "Screenshot captured."
+                json.dumps(
+                    {"success": True, "message": "Screenshot captured. Image attached separately."},
+                    ensure_ascii=False,
+                )
                 if "base64_image" in result
                 else json.dumps(result, ensure_ascii=False)
             )
@@ -114,4 +115,7 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
                     }
                 )
 
-    return "Max steps reached"
+    return json.dumps(
+        {"error": "MaxStepsReached", "message": "Agent exceeded maximum number of steps"},
+        ensure_ascii=False,
+    )

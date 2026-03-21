@@ -31,10 +31,10 @@ async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
     return playwright, context, page
 
 
-async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
+async def wait_for_page_ready(page: Page, load_timeout_ms: int = 10000) -> None:
     """
     Трёхуровневая стратегия ожидания загрузки:
-    
+
     1. domcontentloaded — HTML распарсен
     2. Умная стабилизация — ждём ЗНАЧИМЫХ изменений DOM
        (игнорируем мелкие анимации)
@@ -43,7 +43,7 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
 
     # ─── Уровень 1: базовая загрузка HTML ───
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+        await page.wait_for_load_state("domcontentloaded", timeout=load_timeout_ms)
     except PlaywrightError:
         pass
 
@@ -66,10 +66,10 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
                 // не будут считаться значимыми
                 return elementCount + ':' + Math.round(textLength / 100);
             }
-            
+
             let prev = '';
             let stableCount = 0;
-            
+
             const interval = setInterval(() => {
                 const current = getFingerprint();
                 if (current === prev) {
@@ -83,7 +83,7 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
                     prev = current;
                 }
             }, 150);                                   // 150мс вместо 200мс
-            
+
             setTimeout(() => {
                 clearInterval(interval);
                 resolve('timeout');
@@ -101,14 +101,12 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
             """
             () => {
                 const loaders = document.querySelectorAll(
-                    '.spinner, .skeleton, .loading, ' +
-                    '[class*="loader"], [class*="shimmer"], [class*="preloader"], ' +
-                    '[class*="skeleton"], [aria-busy="true"]'
+                    '.spinner, .loader, .skeleton, .loading, .shimmer, .preloader, [aria-busy="true"]'
                 );
                 // Проверяем, есть ли ВИДИМЫЕ спиннеры
                 for (const el of loaders) {
                     const style = window.getComputedStyle(el);
-                    if (style.display !== 'none' && style.visibility !== 'hidden' 
+                    if (style.display !== 'none' && style.visibility !== 'hidden'
                         && el.offsetHeight > 0) {
                         return false;  // ещё есть видимый спиннер — ждём
                     }
@@ -119,7 +117,7 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:
             timeout=1500,
         )
     except PlaywrightError:
-        pass 
+        pass
 
 
 async def close_browser(context: BrowserContext, playwright: Playwright) -> None:

@@ -7,6 +7,7 @@ from playwright.async_api import BrowserContext, Page
 
 from src.browser.controller import wait_for_page_ready
 from src.parser.page_parser import PageState, extract_page_state
+from src.utils.logger import logger
 
 # Updated by get_page_state, invalidated by navigation-like tools.
 # Read by callers via get_last_page_state().
@@ -284,7 +285,7 @@ async def execute_tool(
             state = await extract_page_state(active_page)
             _page_states[active_page] = state
             result["page_state"] = state.content
-        except Exception:
-            pass  # best-effort: don't fail the tool if page state extraction fails
+        except Exception as e:
+            logger.debug(f"execute_tool: page state extraction failed for '{name}': {e}")
 
     return result, active_page

@@ -1,21 +1,19 @@
 import asyncio
 
+from colorama import Fore
 from dotenv import load_dotenv
 
-from src.agent.core import run_agent
 from src.browser.controller import close_browser, launch_browser
+from src.cli import run_cli
 
 
 async def main() -> None:
     load_dotenv()
-    print("AI Browser Agent starting...")
+    print(Fore.CYAN + "🤖 AI Browser Agent\033[0m")
+    print(Fore.CYAN + "Type a task or 'exit' to quit\033[0m")
     playwright, context, page = await launch_browser()
     try:
-        result = await run_agent(
-            "открой google.com и найди погоду в москве на сегодня", page, context
-        )
-        print(result)
-        await asyncio.sleep(10)
+        await run_cli(page, context)
     finally:
         await close_browser(context, playwright)
 

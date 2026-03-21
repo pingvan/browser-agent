@@ -57,5 +57,11 @@ async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:  # noqa
 
 
 async def close_browser(context: BrowserContext, playwright: Playwright) -> None:
-    await context.close()
-    await playwright.stop()
+    try:
+        await context.close()
+    except Exception:
+        pass
+    try:
+        await playwright.stop()
+    except Exception:
+        pass

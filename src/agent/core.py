@@ -6,6 +6,8 @@ from openai.types.chat import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
 from playwright.async_api import BrowserContext, Page
 
+from src.agent.context_manager import ContextManager
+from src.agent.loop_detector import LoopDetector
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.tools_schema import TOOLS
 from src.browser.tools import execute_tool
@@ -16,6 +18,8 @@ MAX_STEPS = 50
 
 async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
     client = AsyncOpenAI()
+    context_manager = ContextManager()
+    loop_detector = LoopDetector()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": "Start by calling get_page_state to see the current page."},
@@ -26,10 +30,12 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
     while step < MAX_STEPS:
         step += 1
 
+        managed_messages = context_manager.prepare(messages)
+
         try:
             response = await client.chat.completions.create(
                 model="gpt-4.1",
-                messages=cast(list[ChatCompletionMessageParam], messages),
+                messages=cast(list[ChatCompletionMessageParam], managed_messages),
                 tools=cast(Any, TOOLS),
                 tool_choice="auto",
                 max_tokens=4096,
@@ -77,15 +83,24 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
             logger.info(f"Step {step}: {fn_name}({fn_args})")
 
             result, page = await execute_tool(fn_name, fn_args, page, context)
+            loop_detector.record_action(fn_name, fn_args)
 
-            tool_content = (
-                json.dumps(
+            if "base64_image" in result:
+                tool_content = json.dumps(
                     {"success": True, "message": "Screenshot captured. Image attached separately."},
                     ensure_ascii=False,
                 )
-                if "base64_image" in result
-                else json.dumps(result, ensure_ascii=False)
-            )
+            else:
+                tool_content = json.dumps(result, ensure_ascii=False)
+
+            if fn_name == "get_page_state":
+                tool_content = context_manager.truncate_page_state(tool_content)
+
+            if loop_detector.is_stuck():
+                hint = loop_detector.get_unstuck_hint()
+                tool_content += f"\n\n[WARNING: {hint}]"
+                logger.warn("Loop detected — injected unstuck hint")
+
             messages.append(
                 {
                     "role": "tool",

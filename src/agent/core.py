@@ -113,6 +113,12 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
             result, page = await execute_tool(fn_name, fn_args, page, context)
             loop_detector.record_action(fn_name, fn_args)
 
+            # Truncate page state on the raw string before JSON serialization.
+            if fn_name == "get_page_state" and "content" in result:
+                result["content"] = context_manager.truncate_page_state(result["content"])
+            elif "page_state" in result:
+                result["page_state"] = context_manager.truncate_page_state(result["page_state"])
+
             if "base64_image" in result:
                 tool_content = json.dumps(
                     {"success": True, "message": "Screenshot captured. Image attached separately."},
@@ -121,8 +127,7 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
             else:
                 tool_content = json.dumps(result, ensure_ascii=False)
 
-            if fn_name == "get_page_state":
-                tool_content = context_manager.truncate_page_state(tool_content)
+            if fn_name == "get_page_state" or "page_state" in result:
                 updated_state = get_last_page_state(page)
                 if updated_state is not None:
                     injection_matches = security_layer.check_prompt_injection(updated_state)

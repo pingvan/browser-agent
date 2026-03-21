@@ -5,7 +5,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "navigate",
-            "description": "Navigate the browser to a URL.",
+            "description": "Navigate the browser to a URL. Returns page_state with the updated page content and interactive elements.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -22,7 +22,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "Click an interactive element by its ref number from get_page_state.",
+            "description": "Click an interactive element by its ref number from get_page_state. Returns page_state with the updated page content and interactive elements.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -36,7 +36,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "type_text",
-            "description": "Type text into an input field by ref. Optionally press Enter after typing.",
+            "description": "Type text into an input field by ref. Optionally press Enter after typing. Returns page_state with the updated page content and interactive elements.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -55,7 +55,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "select_option",
-            "description": "Select an option from a <select> dropdown by ref.",
+            "description": "Select an option from a <select> dropdown by ref. Returns page_state with the updated page content and interactive elements.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -97,8 +97,8 @@ TOOLS: list[dict[str, Any]] = [
             "name": "get_page_state",
             "description": (
                 "Extract the current page DOM: URL, title, visible text, and all interactive elements "
-                "with their ref numbers. Call this at task start and after every navigation or action "
-                "that changes the page."
+                "with their ref numbers. Use only at task start or when you need to re-inspect the page "
+                "without a preceding navigation action — page-changing tools return page_state automatically."
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
@@ -118,7 +118,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "go_back",
-            "description": "Navigate back to the previous page in browser history.",
+            "description": "Navigate back to the previous page in browser history. Returns page_state with the updated page content and interactive elements.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -134,7 +134,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "switch_tab",
-            "description": "Switch to a browser tab by its index from get_tabs.",
+            "description": "Switch to a browser tab by its index from get_tabs. Returns page_state with the updated page content and interactive elements.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -148,7 +148,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "press_key",
-            "description": "Press a keyboard key, e.g. 'Enter', 'Escape', 'Tab', 'ArrowDown'.",
+            "description": "Press a keyboard key, e.g. 'Enter', 'Escape', 'Tab', 'ArrowDown'. Returns page_state with the updated page content and interactive elements.",
             "parameters": {
                 "type": "object",
                 "properties": {

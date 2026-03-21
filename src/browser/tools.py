@@ -12,6 +12,11 @@ from src.parser.page_parser import PageState, extract_page_state
 # Read by callers via get_last_page_state().
 _page_states: WeakKeyDictionary[Page, PageState] = WeakKeyDictionary()
 
+# Tools that cause page changes — their results get page_state appended automatically.
+_PAGE_CHANGING_TOOLS: frozenset[str] = frozenset(
+    {"navigate", "click", "go_back", "select_option", "type_text", "press_key", "switch_tab"}
+)
+
 
 def get_last_page_state(page: Page) -> PageState | None:
     """Return the cached PageState for the given page, or None if stale/missing."""
@@ -53,7 +58,7 @@ def _validate_args(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-async def execute_tool(
+async def _do_action(
     name: str, args: dict[str, Any], page: Page, context: BrowserContext
 ) -> tuple[dict[str, Any], Page]:
     active_page: Page = page
@@ -267,3 +272,19 @@ async def execute_tool(
 
         case _:
             return {"success": False, "error": f"unknown tool: {name}"}, active_page
+
+
+async def execute_tool(
+    name: str, args: dict[str, Any], page: Page, context: BrowserContext
+) -> tuple[dict[str, Any], Page]:
+    result, active_page = await _do_action(name, args, page, context)
+
+    if name in _PAGE_CHANGING_TOOLS and result.get("success"):
+        try:
+            state = await extract_page_state(active_page)
+            _page_states[active_page] = state
+            result["page_state"] = state.content
+        except Exception:
+            pass  # best-effort: don't fail the tool if page state extraction fails
+
+    return result, active_page

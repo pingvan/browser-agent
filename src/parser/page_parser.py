@@ -1,3 +1,5 @@
+import asyncio
+import base64
 from dataclasses import dataclass
 
 from playwright.async_api import Error as PlaywrightError
@@ -24,6 +26,12 @@ class PageState:
     title: str
     content: str
     elements: list[InteractiveElement]
+
+
+@dataclass
+class PageStateWithScreenshot:
+    page_state: PageState
+    screenshot_b64: str
 
 
 _JS_EXTRACT_ELEMENTS = """
@@ -199,3 +207,19 @@ async def extract_page_state(page: Page) -> PageState:
 
     content = format_page_state(url, title, elements, text_content)
     return PageState(url=url, title=title, content=content, elements=elements)
+
+
+async def _take_screenshot(page: Page) -> str:
+    try:
+        data = await page.screenshot(type="jpeg", quality=35, full_page=False)
+    except Exception:
+        return ""
+    return base64.b64encode(data).decode("utf-8")
+
+
+async def extract_page_state_with_screenshot(page: Page) -> PageStateWithScreenshot:
+    page_state, screenshot_b64 = await asyncio.gather(
+        extract_page_state(page),
+        _take_screenshot(page),
+    )
+    return PageStateWithScreenshot(page_state=page_state, screenshot_b64=screenshot_b64)

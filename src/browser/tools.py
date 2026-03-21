@@ -6,7 +6,11 @@ from weakref import WeakKeyDictionary
 from playwright.async_api import BrowserContext, Page
 
 from src.browser.controller import wait_for_page_ready
-from src.parser.page_parser import PageState, extract_page_state
+from src.parser.page_parser import (
+    PageState,
+    PageStateWithScreenshot,
+    extract_page_state_with_screenshot,
+)
 from src.utils.logger import logger
 
 # Updated by get_page_state, invalidated by navigation-like tools.
@@ -104,9 +108,15 @@ async def _do_action(
 
         case "get_page_state":
             try:
-                state = await extract_page_state(page)
-                _page_states[page] = state
-                return {"success": True, "content": state.content}, active_page
+                result_with_ss: PageStateWithScreenshot = await extract_page_state_with_screenshot(
+                    page
+                )
+                _page_states[page] = result_with_ss.page_state
+                return {
+                    "success": True,
+                    "page_state": result_with_ss.page_state.content,
+                    "screenshot_b64": result_with_ss.screenshot_b64,
+                }, active_page
             except Exception as e:
                 return {
                     "success": False,
@@ -117,7 +127,7 @@ async def _do_action(
             try:
                 data = await page.screenshot(type="jpeg", quality=75, full_page=False)
                 encoded = base64.b64encode(data).decode("utf-8")
-                return {"success": True, "base64_image": encoded}, active_page
+                return {"success": True, "screenshot_b64": encoded}, active_page
             except Exception as e:
                 return {"success": False, "error": str(e)}, active_page
 
@@ -282,9 +292,12 @@ async def execute_tool(
 
     if name in _PAGE_CHANGING_TOOLS and result.get("success"):
         try:
-            state = await extract_page_state(active_page)
-            _page_states[active_page] = state
-            result["page_state"] = state.content
+            result_with_ss: PageStateWithScreenshot = await extract_page_state_with_screenshot(
+                active_page
+            )
+            _page_states[active_page] = result_with_ss.page_state
+            result["page_state"] = result_with_ss.page_state.content
+            result["screenshot_b64"] = result_with_ss.screenshot_b64
         except Exception as e:
             logger.debug(f"execute_tool: page state extraction failed for '{name}': {e}")
 

@@ -5,22 +5,50 @@ MAX_MESSAGES = 40
 
 
 class ContextManager:
-    def _is_screenshot_message(self, msg: dict[str, Any]) -> bool:
+    MAX_SCREENSHOTS_KEPT = 1
+
+    def _has_screenshot(self, msg: dict[str, Any]) -> bool:
         content = msg.get("content")
         if not isinstance(content, list):
             return False
         return any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
+
+    def _strip_screenshot(self, msg: dict[str, Any]) -> dict[str, Any]:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            return msg
+
+        stripped_content: list[Any] = []
+        replaced = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                stripped_content.append(
+                    {
+                        "type": "text",
+                        "text": "[Screenshot removed — outdated. Refer to the latest screenshot above.]",
+                    }
+                )
+                replaced = True
+                continue
+            stripped_content.append(part)
+
+        if not replaced:
+            return msg
+
+        return {**msg, "content": stripped_content}
 
     def prepare(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         system_msg = messages[0]
         task_msg = messages[1]
         body = list(messages[2:])
 
-        # Drop old screenshots first (keep only the last one) — they're token-heavy
-        screenshot_indices = [i for i, m in enumerate(body) if self._is_screenshot_message(m)]
-        if len(screenshot_indices) > 1:
-            to_drop = set(screenshot_indices[:-1])
-            body = [m for i, m in enumerate(body) if i not in to_drop]
+        screenshot_indices = [i for i, m in enumerate(body) if self._has_screenshot(m)]
+        if len(screenshot_indices) > self.MAX_SCREENSHOTS_KEPT:
+            to_strip = set(screenshot_indices[: -self.MAX_SCREENSHOTS_KEPT])
+            body = [
+                self._strip_screenshot(message) if i in to_strip else message
+                for i, message in enumerate(body)
+            ]
 
         if len(body) + 2 <= MAX_MESSAGES:
             return [system_msg, task_msg] + body

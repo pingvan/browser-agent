@@ -31,30 +31,93 @@ async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
     return playwright, context, page
 
 
-async def wait_for_page_ready(page: Page, timeout: int = 10000) -> None:  # noqa: ASYNC109
+async def wait_for_page_ready(page: Page, load_timeout_ms: int = 10000) -> None:
+    """
+    Трёхуровневая стратегия ожидания загрузки:
+
+    1. domcontentloaded — HTML распарсен
+    2. Умная стабилизация — ждём ЗНАЧИМЫХ изменений DOM
+       (игнорируем мелкие анимации)
+    3. Опциональное ожидание исчезновения спиннеров
+    """
+
+    # ─── Уровень 1: базовая загрузка HTML ───
     try:
-        await page.wait_for_load_state("domcontentloaded", timeout=timeout)
+        await page.wait_for_load_state("domcontentloaded", timeout=load_timeout_ms)
     except PlaywrightError:
         pass
 
+    # ─── Уровень 2: умная стабилизация ───
+    # Вместо innerHTML.length (который реагирует на каждую мелочь)
+    # считаем количество элементов + длину текста.
+    # Это игнорирует CSS-анимации, таймеры и мелкие DOM-изменения.
     try:
-        deadline = asyncio.get_running_loop().time() + 5
-        prev_length = -1
-        stable_count = 0
-        while asyncio.get_running_loop().time() < deadline:
-            length: int = await page.evaluate("document.body ? document.body.innerHTML.length : 0")
-            if length == prev_length:
-                stable_count += 1
-                if stable_count >= 3:
-                    break
-            else:
-                stable_count = 0
-                prev_length = length
-            await asyncio.sleep(0.2)
+        await page.evaluate("""
+        () => new Promise((resolve) => {
+            // Функция "отпечатка" страницы — меняется только при значимых изменениях
+            function getFingerprint() {
+                const body = document.body;
+                if (!body) return '0:0';
+                // Количество элементов + длина видимого текста
+                // Не реагирует на анимации, таймеры, мелкие обновления
+                const elementCount = body.querySelectorAll('*').length;
+                const textLength = body.innerText.length;
+                // Округляем текст до сотен — мелкие изменения (таймер "до конца акции 14:59")
+                // не будут считаться значимыми
+                return elementCount + ':' + Math.round(textLength / 100);
+            }
+
+            let prev = '';
+            let stableCount = 0;
+
+            const interval = setInterval(() => {
+                const current = getFingerprint();
+                if (current === prev) {
+                    stableCount++;
+                    if (stableCount >= 2) {           // 2 проверки вместо 3
+                        clearInterval(interval);
+                        resolve('stable');
+                    }
+                } else {
+                    stableCount = 0;
+                    prev = current;
+                }
+            }, 150);                                   // 150мс вместо 200мс
+
+            setTimeout(() => {
+                clearInterval(interval);
+                resolve('timeout');
+            }, 3000);                                  // 3с вместо 5с
+        })
+        """)
     except PlaywrightError:
         pass
 
-    await asyncio.sleep(0.3)
+    # ─── Уровень 3: ждём исчезновения спиннеров (если они есть) ───
+    # Не ждём фиксированные 300мс — ждём КОНКРЕТНЫЙ сигнал
+    try:
+        # Даём 1.5с на исчезновение спиннеров. Если их нет — выходим мгновенно.
+        await page.wait_for_function(
+            """
+            () => {
+                const loaders = document.querySelectorAll(
+                    '.spinner, .loader, .skeleton, .loading, .shimmer, .preloader, [aria-busy="true"]'
+                );
+                // Проверяем, есть ли ВИДИМЫЕ спиннеры
+                for (const el of loaders) {
+                    const style = window.getComputedStyle(el);
+                    if (style.display !== 'none' && style.visibility !== 'hidden'
+                        && el.offsetHeight > 0) {
+                        return false;  // ещё есть видимый спиннер — ждём
+                    }
+                }
+                return true;  // спиннеров нет — готово
+            }
+            """,
+            timeout=1500,
+        )
+    except PlaywrightError:
+        pass
 
 
 async def close_browser(context: BrowserContext, playwright: Playwright) -> None:

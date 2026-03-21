@@ -6,11 +6,21 @@ from weakref import WeakKeyDictionary
 from playwright.async_api import BrowserContext, Page
 
 from src.browser.controller import wait_for_page_ready
-from src.parser.page_parser import PageState, extract_page_state
+from src.parser.page_parser import (
+    PageState,
+    PageStateWithScreenshot,
+    extract_page_state_with_screenshot,
+)
+from src.utils.logger import logger
 
 # Updated by get_page_state, invalidated by navigation-like tools.
 # Read by callers via get_last_page_state().
 _page_states: WeakKeyDictionary[Page, PageState] = WeakKeyDictionary()
+
+# Tools that cause page changes — their results get page_state appended automatically.
+_PAGE_CHANGING_TOOLS: frozenset[str] = frozenset(
+    {"navigate", "click", "go_back", "select_option", "type_text", "press_key", "switch_tab"}
+)
 
 
 def get_last_page_state(page: Page) -> PageState | None:
@@ -53,7 +63,7 @@ def _validate_args(name: str, args: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-async def execute_tool(
+async def _do_action(
     name: str, args: dict[str, Any], page: Page, context: BrowserContext
 ) -> tuple[dict[str, Any], Page]:
     active_page: Page = page
@@ -98,9 +108,15 @@ async def execute_tool(
 
         case "get_page_state":
             try:
-                state = await extract_page_state(page)
-                _page_states[page] = state
-                return {"success": True, "content": state.content}, active_page
+                result_with_ss: PageStateWithScreenshot = await extract_page_state_with_screenshot(
+                    page
+                )
+                _page_states[page] = result_with_ss.page_state
+                return {
+                    "success": True,
+                    "page_state": result_with_ss.page_state.content,
+                    "screenshot_b64": result_with_ss.screenshot_b64,
+                }, active_page
             except Exception as e:
                 return {
                     "success": False,
@@ -111,7 +127,7 @@ async def execute_tool(
             try:
                 data = await page.screenshot(type="jpeg", quality=75, full_page=False)
                 encoded = base64.b64encode(data).decode("utf-8")
-                return {"success": True, "base64_image": encoded}, active_page
+                return {"success": True, "screenshot_b64": encoded}, active_page
             except Exception as e:
                 return {"success": False, "error": str(e)}, active_page
 
@@ -267,3 +283,22 @@ async def execute_tool(
 
         case _:
             return {"success": False, "error": f"unknown tool: {name}"}, active_page
+
+
+async def execute_tool(
+    name: str, args: dict[str, Any], page: Page, context: BrowserContext
+) -> tuple[dict[str, Any], Page]:
+    result, active_page = await _do_action(name, args, page, context)
+
+    if name in _PAGE_CHANGING_TOOLS and result.get("success"):
+        try:
+            result_with_ss: PageStateWithScreenshot = await extract_page_state_with_screenshot(
+                active_page
+            )
+            _page_states[active_page] = result_with_ss.page_state
+            result["page_state"] = result_with_ss.page_state.content
+            result["screenshot_b64"] = result_with_ss.screenshot_b64
+        except Exception as e:
+            logger.debug(f"execute_tool: page state extraction failed for '{name}': {e}")
+
+    return result, active_page

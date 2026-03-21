@@ -12,7 +12,7 @@ async def main() -> None:
     playwright, context, page = await launch_browser()
     try:
         await run_agent(
-            "открой vk.com и отпишись от всех пбаликов за исключением первых 7ми", page, context
+            "открой google.com и найди погоду в москве на сегодня", page, context
         )
         await asyncio.sleep(10)
     finally:

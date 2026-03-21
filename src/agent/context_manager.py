@@ -5,15 +5,27 @@ MAX_MESSAGES = 40
 
 
 class ContextManager:
-    def prepare(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if len(messages) <= MAX_MESSAGES:
-            return messages
+    def _is_screenshot_message(self, msg: dict[str, Any]) -> bool:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            return False
+        return any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
 
+    def prepare(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         system_msg = messages[0]
         task_msg = messages[1]
-        recent = messages[-MAX_MESSAGES:]
-        removed = len(messages) - MAX_MESSAGES - 2
+        body = list(messages[2:])
 
+        # Drop old screenshots first (keep only the last one) — they're token-heavy
+        screenshot_indices = [i for i, m in enumerate(body) if self._is_screenshot_message(m)]
+        if len(screenshot_indices) > 1:
+            to_drop = set(screenshot_indices[:-1])
+            body = [m for i, m in enumerate(body) if i not in to_drop]
+
+        if len(body) + 2 <= MAX_MESSAGES:
+            return [system_msg, task_msg] + body
+
+        removed = len(body) - MAX_MESSAGES
         context_note: dict[str, Any] = {
             "role": "user",
             "content": (
@@ -21,7 +33,7 @@ class ContextManager:
                 "The task and recent actions are preserved.]"
             ),
         }
-        return [system_msg, task_msg, context_note] + recent
+        return [system_msg, task_msg, context_note] + body[-MAX_MESSAGES:]
 
     def truncate_page_state(self, content: str, budget: int = 32_000) -> str:
         if len(content) <= budget:

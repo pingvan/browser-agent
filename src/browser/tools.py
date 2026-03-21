@@ -109,8 +109,8 @@ async def execute_tool(
 
         case "screenshot":
             try:
-                data = await page.screenshot(type="jpeg", quality=75)
-                encoded = base64.b64encode(data).decode()
+                data = await page.screenshot(type="jpeg", quality=75, full_page=False)
+                encoded = base64.b64encode(data).decode("utf-8")
                 return {"success": True, "base64_image": encoded}, active_page
             except Exception as e:
                 return {"success": False, "error": str(e)}, active_page

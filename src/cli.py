@@ -54,7 +54,7 @@ async def run_cli(page: Page, context: BrowserContext) -> None:
                 result = await agent_task
                 await aioconsole.aprint(Fore.GREEN + result + _R)
             except asyncio.CancelledError:
-                print(Fore.YELLOW + "\n⚠️  Task interrupted" + _R)
+                await aioconsole.aprint(Fore.YELLOW + "\n⚠️  Task interrupted" + _R)
             except Exception as e:
                 await aioconsole.aprint(Fore.RED + f"Error: {e}" + _R)
             finally:

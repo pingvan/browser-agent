@@ -50,8 +50,6 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
         message = response.choices[0].message
         messages.append({k: v for k, v in message.model_dump().items() if v is not None})
 
-        
-
         if not message.tool_calls:
             logger.info(message.content or "")
             messages.append(

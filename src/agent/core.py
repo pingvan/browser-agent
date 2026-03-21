@@ -1,6 +1,7 @@
 import json
 from typing import Any, cast
 
+import aioconsole
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
@@ -8,6 +9,18 @@ from playwright.async_api import BrowserContext, Page
 
 from src.agent.context_manager import ContextManager
 from src.agent.loop_detector import LoopDetector
+from src.agent.message_builder import (
+    TaggedMessage,
+    build_action_denied,
+    build_assistant_message,
+    build_continue_prompt,
+    build_invalid_args,
+    build_meta_tool_result,
+    build_system_message,
+    build_task_message,
+    build_tool_result,
+)
+from src.agent.plan_tracker import PlanTracker
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.tools_schema import TOOLS
 from src.agent.trace import (
@@ -21,52 +34,8 @@ from src.utils.logger import logger
 
 MAX_STEPS = 50
 
-
-def _build_tool_message(
-    tool_call_id: str,
-    fn_name: str,
-    result: dict[str, Any],
-    loop_hint: str | None,
-    injection_warning: str | None,
-    context_manager: ContextManager,
-) -> dict[str, Any]:
-    tool_result = dict(result)
-    screenshot_b64 = str(tool_result.pop("screenshot_b64", ""))
-
-    if "page_state" in tool_result:
-        page_state = context_manager.truncate_page_state(str(tool_result.pop("page_state")))
-        action_meta_json = json.dumps(tool_result, ensure_ascii=False)
-        text_content = f"{action_meta_json}\n\n{page_state}"
-    else:
-        text_content = json.dumps(tool_result, ensure_ascii=False)
-
-    if injection_warning:
-        text_content += injection_warning
-
-    if loop_hint:
-        text_content += f"\n\n[WARNING: {loop_hint}]"
-
-    if not screenshot_b64:
-        return {
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": text_content,
-        }
-
-    return {
-        "role": "tool",
-        "tool_call_id": tool_call_id,
-        "content": [
-            {"type": "text", "text": text_content},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{screenshot_b64}",
-                    "detail": "low",
-                },
-            },
-        ],
-    }
+# Tools handled in core.py before reaching execute_tool.
+_META_TOOLS: frozenset[str] = frozenset({"create_plan", "update_plan", "ask_human"})
 
 
 async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
@@ -74,17 +43,20 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
     context_manager = ContextManager()
     loop_detector = LoopDetector()
     security_layer = SecurityLayer()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": "Start by calling get_page_state to see the current page."},
-        {"role": "user", "content": task},
+    plan_tracker: PlanTracker | None = None
+
+    messages: list[TaggedMessage] = [
+        build_system_message(SYSTEM_PROMPT),
+        build_task_message(task),
     ]
 
     step = 0
     while step < MAX_STEPS:
         step += 1
 
-        managed_messages = context_manager.prepare(messages)
+        managed_messages = context_manager.prepare(
+            messages, task=task, step=step, plan=plan_tracker
+        )
 
         try:
             response = await client.chat.completions.create(
@@ -101,22 +73,14 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
         logger.debug(f"Model response: {response.model}, {response.choices[0].message}")
 
         message = response.choices[0].message
-        messages.append({k: v for k, v in message.model_dump().items() if v is not None})
+        msg_dict = {k: v for k, v in message.model_dump().items() if v is not None}
+        messages.append(build_assistant_message(msg_dict))
         model_note = format_model_note(message.content)
 
         if not message.tool_calls:
             if model_note:
                 logger.info(f"Step {step}\nModel note: {model_note}")
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "If you have completed the task, call the `done` tool with a concise summary "
-                        "of the result. Otherwise, continue using the available tools to make progress "
-                        "toward completing the task."
-                    ),
-                }
-            )
+            messages.append(build_continue_prompt())
             continue
 
         if message.content:
@@ -134,21 +98,50 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
                 error_lines.append(f"Error: invalid tool arguments: {e}")
                 logger.error("\n".join(error_lines))
                 messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(
-                            {
-                                "error": "InvalidToolArguments",
-                                "message": f"Failed to parse arguments for tool '{fn_name}': {e}",
-                                "raw_arguments": tool_call.function.arguments,
-                            },
-                            ensure_ascii=False,
-                        ),
-                    }
+                    build_invalid_args(tool_call.id, fn_name, str(e), tool_call.function.arguments)
                 )
                 continue
 
+            # ------------------------------------------------------------------
+            # Meta-tools: handled here, never reach execute_tool
+            # ------------------------------------------------------------------
+            if fn_name in _META_TOOLS:
+                if fn_name == "create_plan":
+                    steps: list[str] = fn_args.get("steps", [])
+                    plan_tracker = PlanTracker(steps=steps)
+                    logger.info(f"Step {step} — Plan created ({len(steps)} steps)")
+                    messages.append(
+                        build_meta_tool_result(
+                            tool_call.id, {"success": True, "steps_created": len(steps)}
+                        )
+                    )
+
+                elif fn_name == "update_plan":
+                    if plan_tracker is not None:
+                        completed = fn_args.get("completed_steps", [])
+                        if completed:
+                            plan_tracker.mark_completed(completed)
+                        if "revised_remaining" in fn_args:
+                            plan_tracker.revise_remaining(fn_args["revised_remaining"])
+                        if "notes" in fn_args:
+                            plan_tracker.add_notes(fn_args["notes"])
+                        logger.info(f"Step {step} — Plan updated")
+                    messages.append(build_meta_tool_result(tool_call.id, {"success": True}))
+
+                elif fn_name == "ask_human":
+                    question = str(fn_args.get("question", ""))
+                    logger.info(f"Step {step} — Agent asks: {question}")
+                    answer = await aioconsole.ainput(f"\n[Agent] {question}\nYour answer: ")
+                    logger.info(f"Step {step} — Human answered: {answer}")
+                    messages.append(
+                        build_meta_tool_result(tool_call.id, {"success": True, "answer": answer})
+                    )
+
+                continue
+
+            # ------------------------------------------------------------------
+            # Browser tools
+            # ------------------------------------------------------------------
             page_state_before = get_last_page_state(page)
             logger.info(
                 build_step_start_log(
@@ -160,8 +153,7 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
                 )
             )
 
-            page_state = page_state_before
-            if security_layer.is_dangerous(fn_name, fn_args, page_state):
+            if security_layer.is_dangerous(fn_name, fn_args, page_state_before):
                 allowed = await security_layer.request_confirmation(fn_name, fn_args)
                 if not allowed:
                     logger.warning(
@@ -176,19 +168,7 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
                             after_state=None,
                         )
                     )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(
-                                {
-                                    "error": "ActionDenied",
-                                    "message": "User denied this action. Choose a different approach.",
-                                },
-                                ensure_ascii=False,
-                            ),
-                        }
-                    )
+                    messages.append(build_action_denied(tool_call.id))
                     continue
 
             result, page = await execute_tool(fn_name, fn_args, page, context)
@@ -228,19 +208,16 @@ async def run_agent(task: str, page: Page, context: BrowserContext) -> str:
                 logger.warning("Loop detected — injected unstuck hint")
 
             messages.append(
-                _build_tool_message(
+                build_tool_result(
                     tool_call_id=tool_call.id,
-                    fn_name=fn_name,
                     result=result,
                     loop_hint=loop_hint,
                     injection_warning=injection_warning,
-                    context_manager=context_manager,
                 )
             )
 
             if fn_name == "done":
-                summary = str(result.get("summary", ""))
-                return summary
+                return str(result.get("summary", ""))
 
     return json.dumps(
         {"error": "MaxStepsReached", "message": "Agent exceeded maximum number of steps"},

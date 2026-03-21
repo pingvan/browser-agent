@@ -177,6 +177,82 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "create_plan",
+            "description": (
+                "Create a step-by-step plan for completing the current task. "
+                "Call this immediately after the first get_page_state. "
+                "Write 5–10 high-level steps that outline your approach. "
+                "The plan will be shown to you at every subsequent step."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered list of 5–10 concrete steps to complete the task",
+                    },
+                },
+                "required": ["steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan",
+            "description": (
+                "Update the current plan: mark steps as completed and/or revise remaining steps. "
+                "Call this after completing a step or when the page is different from what you expected. "
+                "At least one of completed_steps or revised_remaining must be provided."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "completed_steps": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "0-based indices of steps that are now completed",
+                    },
+                    "revised_remaining": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "New list of steps to replace all uncompleted steps (use when plan needs adaptation)",
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Observations to record (e.g. found element ref, URL, encountered obstacle)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_human",
+            "description": (
+                "Ask the user for information you need but cannot obtain from the page. "
+                "Use when you need login credentials, account-specific data, ambiguous preferences, "
+                "or any clarification required to proceed. Ask one clear, specific question. "
+                "The user will respond and you will continue the task with the answer."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "A single, clear, specific question for the user",
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "done",
             "description": "Signal that the task is complete. Provide a clear summary of what was accomplished.",
             "parameters": {

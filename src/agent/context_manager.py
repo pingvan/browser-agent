@@ -1,28 +1,36 @@
-import re
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from src.agent.message_builder import (
+    TaggedMessage,
+    build_context_note,
+    build_plan_message,
+    build_task_reminder,
+)
+
+if TYPE_CHECKING:
+    from src.agent.plan_tracker import PlanTracker
 
 MAX_MESSAGES = 40
+TASK_REMINDER_INTERVAL = 10
+
+_PINNED_TAGS: frozenset[str] = frozenset({"system_prompt", "task"})
 
 
 class ContextManager:
     MAX_SCREENSHOTS_KEPT = 1
 
-    def _has_screenshot(self, msg: dict[str, Any]) -> bool:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            return False
-        return any(isinstance(p, dict) and p.get("type") == "image_url" for p in content)
-
-    def _strip_screenshot(self, msg: dict[str, Any]) -> dict[str, Any]:
-        content = msg.get("content")
+    def _strip_screenshot(self, msg: TaggedMessage) -> TaggedMessage:
+        content = msg.msg.get("content")
         if not isinstance(content, list):
             return msg
 
-        stripped_content: list[Any] = []
+        stripped: list[Any] = []
         replaced = False
         for part in content:
             if isinstance(part, dict) and part.get("type") == "image_url":
-                stripped_content.append(
+                stripped.append(
                     {
                         "type": "text",
                         "text": "[Screenshot removed — outdated. Refer to the latest screenshot above.]",
@@ -30,72 +38,46 @@ class ContextManager:
                 )
                 replaced = True
                 continue
-            stripped_content.append(part)
+            stripped.append(part)
 
         if not replaced:
             return msg
 
-        return {**msg, "content": stripped_content}
+        return TaggedMessage(tag=msg.tag, msg={**msg.msg, "content": stripped})
 
-    def prepare(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        system_msg = messages[0]
-        task_msg = messages[1]
-        body = list(messages[2:])
+    def _manage_screenshots(self, body: list[TaggedMessage]) -> list[TaggedMessage]:
+        screenshot_indices = [i for i, m in enumerate(body) if m.has_screenshot]
+        if len(screenshot_indices) <= self.MAX_SCREENSHOTS_KEPT:
+            return body
+        to_strip = set(screenshot_indices[: -self.MAX_SCREENSHOTS_KEPT])
+        return [self._strip_screenshot(m) if i in to_strip else m for i, m in enumerate(body)]
 
-        screenshot_indices = [i for i, m in enumerate(body) if self._has_screenshot(m)]
-        if len(screenshot_indices) > self.MAX_SCREENSHOTS_KEPT:
-            to_strip = set(screenshot_indices[: -self.MAX_SCREENSHOTS_KEPT])
-            body = [
-                self._strip_screenshot(message) if i in to_strip else message
-                for i, message in enumerate(body)
-            ]
+    def prepare(
+        self,
+        messages: list[TaggedMessage],
+        *,
+        task: str,
+        step: int,
+        plan: PlanTracker | None = None,
+    ) -> list[dict[str, Any]]:
+        pinned = [m for m in messages if m.tag in _PINNED_TAGS]
+        body = [m for m in messages if m.tag not in _PINNED_TAGS]
 
-        if len(body) + 2 <= MAX_MESSAGES:
-            return [system_msg, task_msg] + body
+        body = self._manage_screenshots(body)
 
-        removed = len(body) - MAX_MESSAGES
-        context_note: dict[str, Any] = {
-            "role": "user",
-            "content": (
-                f"[Context note: {removed} earlier messages were trimmed. "
-                "The task and recent actions are preserved.]"
-            ),
-        }
-        return [system_msg, task_msg, context_note] + body[-MAX_MESSAGES:]
+        removed = 0
+        if len(body) > MAX_MESSAGES:
+            removed = len(body) - MAX_MESSAGES
+            body = [build_context_note(removed)] + body[-MAX_MESSAGES:]
 
-    def truncate_page_state(self, content: str, budget: int = 32_000) -> str:
-        if len(content) <= budget:
-            return content
+        result = list(pinned)
 
-        header_match = re.search(r"^(## Current Page.*?)(?=## Page Content)", content, re.DOTALL)
-        header = header_match.group(1) if header_match else ""
+        if plan is not None:
+            result.append(build_plan_message(plan, step))
 
-        elements_match = re.search(r"(## Interactive Elements.*)", content, re.DOTALL)
-        if elements_match:
-            elements_block = elements_match.group(1)
-            lines = elements_block.split("\n")
-            heading = lines[0]
-            element_lines = [line for line in lines[1:] if line.strip()]
-            truncated_elements = element_lines[:100]
-            if len(element_lines) > 100:
-                truncated_elements.append(
-                    f"\n[... {len(element_lines) - 100} more elements truncated]"
-                )
-            elements_section = heading + "\n" + "\n".join(truncated_elements)
-        else:
-            elements_section = ""
+        result += body
 
-        used = len(header) + len(elements_section)
-        remaining_budget = max(budget - used - 50, 500)
+        if step % TASK_REMINDER_INTERVAL == 0 or removed > 0:
+            result.append(build_task_reminder(task, step))
 
-        page_content_match = re.search(
-            r"(## Page Content.*?)(?=## Interactive Elements)", content, re.DOTALL
-        )
-        if page_content_match:
-            page_content = page_content_match.group(1)
-            if len(page_content) > remaining_budget:
-                page_content = page_content[:remaining_budget] + "\n[... content truncated]"
-        else:
-            page_content = ""
-
-        return header + page_content + elements_section
+        return [m.msg for m in result]

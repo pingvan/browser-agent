@@ -186,7 +186,7 @@ TOOLS: list[dict[str, Any]] = [
                         "description": "True if task succeeded, False if it could not be completed",
                     },
                 },
-                "required": ["summary"],
+                "required": ["summary", "success"],
             },
         },
     },

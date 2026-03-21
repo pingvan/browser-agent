@@ -1,7 +1,5 @@
 import asyncio
 
-import time
-
 from dotenv import load_dotenv
 
 from src.agent.core import run_agent
@@ -13,9 +11,10 @@ async def main() -> None:
     print("AI Browser Agent starting...")
     playwright, context, page = await launch_browser()
     try:
-        summary = await run_agent("открой google.com и найди погоду в Москве", page, context)
-        print(f"Result: {summary}")
-        time.sleep(10)
+        await run_agent(
+            "открой vk.com и отпишись от всех пбаликов за исключением первых 7ми", page, context
+        )
+        await asyncio.sleep(10)
     finally:
         await close_browser(context, playwright)
 

@@ -12,6 +12,7 @@ async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
     context = await playwright.chromium.launch_persistent_context(
         ".browser-data",
         headless=False,
+        handle_sigint=False,
         viewport={"width": 1280, "height": 900},
         locale="ru-RU",
         args=["--disable-blink-features=AutomationControlled"],

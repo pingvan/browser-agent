@@ -1,6 +1,6 @@
 import asyncio
 
-from colorama import Fore
+from colorama import Fore, Style
 from dotenv import load_dotenv
 
 from src.browser.controller import close_browser, launch_browser
@@ -14,9 +14,18 @@ async def main() -> None:
     playwright, context, page = await launch_browser()
     try:
         await run_cli(page, context)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print(Fore.YELLOW + "\nGoodbye!" + Style.RESET_ALL)
     finally:
+        task = asyncio.current_task()
+        if task is not None:
+            while task.cancelling() > 0:
+                task.uncancel()
         await close_browser(context, playwright)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

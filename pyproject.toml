@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aioconsole>=0.8.2",
     "colorama>=0.4.6",
+    "langgraph>=0.3.34",
     "openai>=2.29.0",
     "playwright>=1.58.0",
     "python-dotenv>=1.2.2",

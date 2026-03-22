@@ -4,16 +4,18 @@ from pathlib import Path
 from playwright.async_api import BrowserContext, Download, Page, Playwright, async_playwright
 from playwright.async_api import Error as PlaywrightError
 
+from src.config.settings import BROWSER_DATA_DIR, VIEWPORT_HEIGHT, VIEWPORT_WIDTH
+
 
 async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
     await asyncio.to_thread(Path("./downloads").mkdir, exist_ok=True)
 
     playwright = await async_playwright().start()
     context = await playwright.chromium.launch_persistent_context(
-        ".browser-data",
+        BROWSER_DATA_DIR,
         headless=False,
         handle_sigint=False,
-        viewport={"width": 1280, "height": 900},
+        viewport={"width": VIEWPORT_WIDTH, "height": VIEWPORT_HEIGHT},
         locale="ru-RU",
         args=["--disable-blink-features=AutomationControlled"],
     )

@@ -11,6 +11,7 @@ from src.parser.page_parser import (
     PageState,
     PageStateWithScreenshot,
     extract_page_state_with_screenshot,
+    take_screenshot,
 )
 from src.utils.logger import logger
 
@@ -123,7 +124,7 @@ async def _do_action(
 
         case "screenshot":
             try:
-                data = await page.screenshot(type="jpeg", quality=75, full_page=False)
+                data = await page.screenshot(type="jpeg", quality=85, full_page=False)
                 encoded = base64.b64encode(data).decode("utf-8")
                 return {"success": True, "screenshot_b64": encoded}, active_page
             except Exception as e:
@@ -142,7 +143,13 @@ async def _do_action(
                     "description": f"Clicked element [{ref}]",
                 }, active_page
             except Exception as e:
-                return {"success": False, "error": str(e)}, active_page
+                error_msg = str(e)
+                if "waiting for locator" in error_msg.lower() or "not found" in error_msg.lower():
+                    error_msg += (
+                        f" Element [{ref}] not found. The page may have changed. "
+                        "Call get_page_state() to refresh element refs."
+                    )
+                return {"success": False, "error": error_msg}, active_page
 
         case "type_text":
             try:
@@ -356,7 +363,10 @@ async def _do_action(
             return {"success": False, "error": f"unknown tool: {name}"}, active_page
 
 
-_AUTO_STATE_TOOLS: frozenset[str] = frozenset({"navigate", "click", "go_back", "switch_tab"})
+# Tools that automatically receive a screenshot after successful execution.
+_AUTO_SCREENSHOT_TOOLS: frozenset[str] = frozenset(
+    {"navigate", "click", "go_back", "switch_tab", "scroll", "select_option", "press_key", "wait"}
+)
 
 
 async def execute_tool(
@@ -364,15 +374,19 @@ async def execute_tool(
 ) -> tuple[dict[str, Any], Page]:
     result, active_page = await _do_action(name, args, page, context)
 
-    if name in _AUTO_STATE_TOOLS and result.get("success"):
+    if not result.get("success"):
+        return result, active_page
+
+    # Auto-screenshot for page-changing tools (vision-first strategy).
+    needs_screenshot = name in _AUTO_SCREENSHOT_TOOLS or (
+        name == "type_text" and args.get("press_enter")
+    )
+    if needs_screenshot:
         try:
-            result_with_ss: PageStateWithScreenshot = await extract_page_state_with_screenshot(
-                active_page
-            )
-            _page_states[active_page] = result_with_ss.page_state
-            result["page_state"] = result_with_ss.page_state.content
-            result["screenshot_b64"] = result_with_ss.screenshot_b64
+            screenshot_b64 = await take_screenshot(active_page)
+            if screenshot_b64:
+                result["screenshot_b64"] = screenshot_b64
         except Exception as e:
-            logger.debug(f"execute_tool: page state extraction failed for '{name}': {e}")
+            logger.debug(f"execute_tool: screenshot failed for '{name}': {e}")
 
     return result, active_page

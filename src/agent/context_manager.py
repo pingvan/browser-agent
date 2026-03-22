@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.agent.message_builder import (
     TaggedMessage,
+    build_budget_warning,
     build_context_note,
     build_plan_message,
     build_task_reminder,
@@ -58,6 +59,7 @@ class ContextManager:
         *,
         task: str,
         step: int,
+        max_steps: int = 50,
         plan: PlanTracker | None = None,
     ) -> list[dict[str, Any]]:
         pinned = [m for m in messages if m.tag in _PINNED_TAGS]
@@ -77,7 +79,9 @@ class ContextManager:
 
         result += body
 
-        if step % TASK_REMINDER_INTERVAL == 0 or removed > 0:
+        if step >= max_steps - 1 or step >= int(0.75 * max_steps):
+            result.append(build_budget_warning(step, max_steps))
+        elif step % TASK_REMINDER_INTERVAL == 0 or removed > 0:
             result.append(build_task_reminder(task, step))
 
         return [m.msg for m in result]

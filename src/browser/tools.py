@@ -1,5 +1,6 @@
-# Browser Tools: execute_tool() — implementation of all 13 browser tools
+# Browser Tools: execute_tool() — implementation of all browser tools
 import base64
+import re
 from typing import Any
 from weakref import WeakKeyDictionary
 
@@ -16,11 +17,6 @@ from src.utils.logger import logger
 # Updated by get_page_state, invalidated by navigation-like tools.
 # Read by callers via get_last_page_state().
 _page_states: WeakKeyDictionary[Page, PageState] = WeakKeyDictionary()
-
-# Tools that cause page changes — their results get page_state appended automatically.
-_PAGE_CHANGING_TOOLS: frozenset[str] = frozenset(
-    {"navigate", "click", "go_back", "select_option", "type_text", "press_key", "switch_tab"}
-)
 
 
 def get_last_page_state(page: Page) -> PageState | None:
@@ -47,6 +43,8 @@ _REQUIRED_ARGS: dict[str, list[str]] = {
     "press_key": ["key"],
     "scroll": ["direction"],
     "switch_tab": ["index"],
+    "search_page": ["query"],
+    "extract": ["query"],
     "done": ["summary"],
 }
 
@@ -269,15 +267,88 @@ async def _do_action(
             except Exception as e:
                 return {"success": False, "error": str(e)}, active_page
 
+        case "wait":
+            try:
+                seconds = min(float(args.get("seconds", 3)), 10.0)
+                await page.wait_for_timeout(int(seconds * 1000))
+                return {"success": True, "waited_seconds": seconds}, active_page
+            except Exception as e:
+                return {"success": False, "error": str(e)}, active_page
+
+        case "search_page":
+            try:
+                query_str: str = args["query"]
+                js = """
+                (query) => {
+                    const text = document.body.innerText;
+                    const results = [];
+                    const lower = text.toLowerCase();
+                    const q = query.toLowerCase();
+                    let pos = 0;
+                    while (results.length < 10) {
+                        const idx = lower.indexOf(q, pos);
+                        if (idx === -1) break;
+                        const start = Math.max(0, idx - 50);
+                        const end = Math.min(text.length, idx + query.length + 50);
+                        results.push({
+                            match: text.substring(idx, idx + query.length),
+                            context: text.substring(start, end),
+                            position: idx
+                        });
+                        pos = idx + 1;
+                    }
+                    return results;
+                }
+                """
+                matches: list[dict[str, Any]] = await page.evaluate(js, query_str)
+                return {
+                    "success": True,
+                    "query": query_str,
+                    "total_matches": len(matches),
+                    "matches": matches,
+                }, active_page
+            except Exception as e:
+                return {"success": False, "error": str(e)}, active_page
+
+        case "extract":
+            try:
+                extract_query: str = args["query"]
+                js_extract = """
+                () => {
+                    return document.body.innerText.substring(0, 50000);
+                }
+                """
+                full_text: str = await page.evaluate(js_extract)
+                # Simple keyword filtering: return paragraphs containing the query
+                paragraphs = re.split(r"\n{2,}", full_text)
+                query_lower = extract_query.lower()
+                relevant = [p.strip() for p in paragraphs if query_lower in p.lower()]
+                if relevant:
+                    content = "\n\n".join(relevant[:20])
+                else:
+                    # No keyword matches — return first 5000 chars as fallback
+                    content = full_text[:5000]
+                return {
+                    "success": True,
+                    "query": extract_query,
+                    "content": content,
+                }, active_page
+            except Exception as e:
+                return {"success": False, "error": str(e)}, active_page
+
         case "done":
             try:
                 summary: str = args["summary"]
                 success: bool = args.get("success", True)
-                return {
+                files_to_display: list[str] = args.get("files_to_display", [])
+                result_dict: dict[str, Any] = {
                     "done": True,
                     "summary": summary,
                     "success": success,
-                }, active_page
+                }
+                if files_to_display:
+                    result_dict["files_to_display"] = files_to_display
+                return result_dict, active_page
             except Exception as e:
                 return {"success": False, "error": str(e)}, active_page
 
@@ -285,12 +356,15 @@ async def _do_action(
             return {"success": False, "error": f"unknown tool: {name}"}, active_page
 
 
+_AUTO_STATE_TOOLS: frozenset[str] = frozenset({"navigate", "click", "go_back", "switch_tab"})
+
+
 async def execute_tool(
     name: str, args: dict[str, Any], page: Page, context: BrowserContext
 ) -> tuple[dict[str, Any], Page]:
     result, active_page = await _do_action(name, args, page, context)
 
-    if name in _PAGE_CHANGING_TOOLS and result.get("success"):
+    if name in _AUTO_STATE_TOOLS and result.get("success"):
         try:
             result_with_ss: PageStateWithScreenshot = await extract_page_state_with_screenshot(
                 active_page

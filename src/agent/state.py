@@ -12,8 +12,7 @@ from src.config.settings import (
     MAX_MEMORY_VALUE_LENGTH,
 )
 
-PlanStatus = Literal["pending", "active", "done", "skipped"]
-AgentStatus = Literal["running", "done", "need_input", "error", "replan"]
+AgentStatus = Literal["running", "done", "need_input", "error"]
 
 
 class BBox(TypedDict):
@@ -38,192 +37,129 @@ class ElementSnapshot(TypedDict, total=False):
     bbox: BBox
 
 
-class PlanStep(TypedDict):
-    id: int
-    description: str
-    status: PlanStatus
-    result: str
-
-
 class MemoryEntry(TypedDict):
     key: str
     value: str
     source: str
 
 
-class ActionRecord(TypedDict, total=False):
+class StepRecord(TypedDict, total=False):
     step: int
     action: str
     result: str
     success: bool
+    page_changed: bool
+
+
+class StepPacket(TypedDict, total=False):
+    step_eval: Literal["success", "partial", "blocked", "failed"]
+    decision_note: str
+    memory_candidate: str
+    next_goal: str
+
+
+class InspectionCandidate(TypedDict):
+    element_id: int
+    reason: str
+
+
+class InspectionResult(TypedDict, total=False):
+    question: str
+    answer: str
+    observations: list[str]
+    candidate_elements: list[InspectionCandidate]
+    source: Literal["dom", "vision"]
+    fingerprint: str
+
+
+class PageSummary(TypedDict, total=False):
+    summary: str
+    salient_facts: list[str]
 
 
 class AgentState(TypedDict, total=False):
     task: str
+    current_subtask: str
     status: AgentStatus
 
-    plan: list[PlanStep]
-    current_plan_step: int
-    plan_reasoning: str
-
     memory: list[MemoryEntry]
+    step_history: list[StepRecord]
+    last_step_packet: StepPacket
+    last_dom_inspection: InspectionResult
 
     current_url: str
     page_title: str
-    page_summary: str
+    page_content: str
     page_fingerprint: str
+    page_text_excerpt: str
+    last_screenshot_b64: str
     recent_page_fingerprints: list[str]
     interactive_elements: list[ElementSnapshot]
-    screenshot_b64: str
-    transition_summary: str
-    cached_page_summary: dict[str, str]
+    last_observation: dict[str, Any]
 
-    next_action: dict[str, Any] | None
-    planned_actions: list[dict[str, Any]]
-    reasoning: str
-    last_action: dict[str, Any] | None
     last_action_result: dict[str, Any] | None
-    last_action_fingerprint: str
     last_action_signature: str
-    needs_transition_analysis: bool
+    last_action_fingerprint: str
+    recent_action_signatures: list[str]
 
-    action_history: list[ActionRecord]
-    history_summary: str
-
-    step_count: int
     retry_count: int
-    repeated_noop_count: int
-    steps_since_last_plan_progress: int
+    invalid_tool_calls: int
+    consecutive_failures: int
+    consecutive_stuck_steps: int
+    last_error: str
+    stuck_hint: str
+    prompt_injection_warnings: list[str]
 
     user_response: str | None
     final_report: str
-
-    last_error: str
+    step_count: int
 
 
 def create_initial_state(task: str) -> AgentState:
     return AgentState(
         task=task,
+        current_subtask="",
         status="running",
-        plan=[],
-        current_plan_step=-1,
-        plan_reasoning="",
         memory=[],
+        step_history=[],
+        last_step_packet=StepPacket(
+            step_eval="partial",
+            decision_note="",
+            memory_candidate="",
+            next_goal="",
+        ),
+        last_dom_inspection=InspectionResult(
+            question="",
+            answer="",
+            observations=[],
+            candidate_elements=[],
+            source="dom",
+            fingerprint="",
+        ),
         current_url="",
         page_title="",
-        page_summary="",
+        page_content="",
         page_fingerprint="",
+        page_text_excerpt="",
+        last_screenshot_b64="",
         recent_page_fingerprints=[],
         interactive_elements=[],
-        screenshot_b64="",
-        transition_summary="",
-        cached_page_summary={},
-        next_action=None,
-        planned_actions=[],
-        reasoning="",
-        last_action=None,
+        last_observation={},
         last_action_result=None,
-        last_action_fingerprint="",
         last_action_signature="",
-        needs_transition_analysis=False,
-        action_history=[],
-        history_summary="",
-        step_count=0,
+        last_action_fingerprint="",
+        recent_action_signatures=[],
         retry_count=0,
-        repeated_noop_count=0,
-        steps_since_last_plan_progress=0,
+        invalid_tool_calls=0,
+        consecutive_failures=0,
+        consecutive_stuck_steps=0,
+        last_error="",
+        stuck_hint="",
+        prompt_injection_warnings=[],
         user_response=None,
         final_report="",
-        last_error="",
+        step_count=0,
     )
-
-
-def normalize_plan(step_descriptions: list[str]) -> list[PlanStep]:
-    plan: list[PlanStep] = []
-    for index, description in enumerate(step_descriptions):
-        plan.append(
-            PlanStep(
-                id=index,
-                description=description.strip(),
-                status="pending",
-                result="",
-            )
-        )
-    if plan:
-        plan[0]["status"] = "active"
-    return plan
-
-
-def merge_replanned_plan(
-    existing_plan: list[PlanStep] | None, step_descriptions: list[str]
-) -> list[PlanStep]:
-    completed_steps = [step for step in (existing_plan or []) if step["status"] == "done"]
-    completed_descriptions = {step["description"] for step in completed_steps}
-
-    plan: list[PlanStep] = []
-    for step in completed_steps:
-        plan.append(
-            PlanStep(
-                id=len(plan),
-                description=step["description"],
-                status="done",
-                result=step["result"],
-            )
-        )
-
-    for description in step_descriptions:
-        text = description.strip()
-        if not text or text in completed_descriptions:
-            continue
-        plan.append(
-            PlanStep(
-                id=len(plan),
-                description=text,
-                status="pending",
-                result="",
-            )
-        )
-
-    for step in plan:
-        if step["status"] == "pending":
-            step["status"] = "active"
-            break
-
-    return plan
-
-
-def current_plan_step_id(plan: list[PlanStep]) -> int:
-    for index, step in enumerate(plan):
-        if step["status"] == "active":
-            return index
-    for index, step in enumerate(plan):
-        if step["status"] == "pending":
-            return index
-    return -1
-
-
-def mark_plan_step_done(
-    plan: list[PlanStep], step_id: int, result: str
-) -> tuple[list[PlanStep], int, bool]:
-    if step_id < 0 or step_id >= len(plan):
-        return plan, current_plan_step_id(plan), False
-
-    updated = [PlanStep(**step) for step in plan]
-    for step in updated:
-        if step["status"] == "active":
-            step["status"] = "pending"
-
-    updated[step_id]["status"] = "done"
-    updated[step_id]["result"] = result[:MAX_MEMORY_VALUE_LENGTH]
-
-    next_index = -1
-    for index, step in enumerate(updated):
-        if step["status"] == "pending":
-            step["status"] = "active"
-            next_index = index
-            break
-
-    return updated, next_index, True
 
 
 def store_memory(
@@ -244,40 +180,26 @@ def store_memory(
     return updated
 
 
-def refresh_history_summary(action_history: list[ActionRecord]) -> str:
-    if len(action_history) <= ACTION_HISTORY_WINDOW:
-        return ""
-
-    older = action_history[:-ACTION_HISTORY_WINDOW]
-    if not older:
-        return ""
-
-    fragments = []
-    for entry in older[-5:]:
-        fragments.append(
-            f"step {entry.get('step', '?')}: {entry.get('action', '')} -> {entry.get('result', '')}"
+def append_step_history(
+    history: list[StepRecord],
+    *,
+    step: int,
+    action: str,
+    result: str,
+    success: bool,
+    page_changed: bool = False,
+) -> list[StepRecord]:
+    updated = list(history)
+    updated.append(
+        StepRecord(
+            step=step,
+            action=action,
+            result=result[:MAX_MEMORY_VALUE_LENGTH],
+            success=success,
+            page_changed=page_changed,
         )
-    return " | ".join(fragments)
-
-
-def render_plan(plan: list[PlanStep], current_step: int) -> str:
-    if not plan:
-        return "(plan is empty)"
-
-    lines: list[str] = []
-    for index, step in enumerate(plan):
-        if step["status"] == "done":
-            prefix = "[✓]"
-        elif index == current_step or step["status"] == "active":
-            prefix = "[→]"
-        elif step["status"] == "skipped":
-            prefix = "[-]"
-        else:
-            prefix = "[ ]"
-
-        result = f" — {step['result']}" if step["result"] else ""
-        lines.append(f"{prefix} {step['id']}. {step['description']}{result}")
-    return "\n".join(lines)
+    )
+    return updated
 
 
 def render_memory(memory: list[MemoryEntry]) -> str:
@@ -286,18 +208,26 @@ def render_memory(memory: list[MemoryEntry]) -> str:
     return "\n".join(f'• {entry["key"]}: "{entry["value"]}" ({entry["source"]})' for entry in memory)
 
 
-def render_recent_history(action_history: list[ActionRecord]) -> str:
-    if not action_history:
+def render_recent_history(history: list[StepRecord]) -> str:
+    if not history:
         return "(no actions yet)"
 
-    recent = action_history[-ACTION_HISTORY_WINDOW:]
+    recent = history[-ACTION_HISTORY_WINDOW:]
     lines = []
     for entry in recent:
         verdict = "✓" if entry.get("success", False) else "✗"
+        changed = " changed" if entry.get("page_changed", False) else ""
         lines.append(
-            f"[{verdict}] step {entry.get('step', '?')}: {entry.get('action', '')} -> {entry.get('result', '')}"
+            f"[{verdict}] step {entry.get('step', '?')}: {entry.get('action', '')}{changed} -> {entry.get('result', '')}"
         )
     return "\n".join(lines)
+
+
+def append_recent_item(items: list[str], value: str, *, limit: int = 8) -> list[str]:
+    updated = [item for item in items if item]
+    if value:
+        updated.append(value)
+    return updated[-limit:]
 
 
 _TRACKING_QUERY_KEYS: frozenset[str] = frozenset(

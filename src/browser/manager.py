@@ -191,6 +191,39 @@ class BrowserManager:
             await locator.wait_for(state="visible", timeout=1500)
             await locator.click(timeout=5000, no_wait_after=True)
         except Exception as exc:
+            message = str(exc)
+            if "intercepts pointer events" in message.lower():
+                if target_href.startswith(("http://", "https://")):
+                    logger.info(
+                        "Browser.click: click blocked by overlay/intercept, navigating directly to href="
+                        f"{target_href}"
+                    )
+                    await self.page.goto(target_href, timeout=NAVIGATION_TIMEOUT_MS)
+                    await self._wait_for_stable(wait_for_dom_stability=True)
+                    return self._build_action_result(
+                        description=f"Opened href for element [{element_id}] after click interception",
+                        url_before=url_before,
+                        url_after=self.page.url,
+                        page_changed=normalize_url_for_fingerprint(url_before)
+                        != normalize_url_for_fingerprint(self.page.url),
+                        target_href=target_href,
+                    )
+
+                logger.info(
+                    f"Browser.click: click blocked by overlay/intercept for element [{element_id}], "
+                    "returning failure so the agent can inspect the current UI"
+                )
+                return {
+                    "success": False,
+                    "description": "Click blocked by overlay or modal. Inspect the current UI before retrying.",
+                    "error": message,
+                    "url_before": url_before,
+                    "url_after": self.page.url,
+                    "page_changed": False,
+                    "opened_new_tab": False,
+                    "tab_index": self._current_tab_index(),
+                    "target_href": target_href,
+                }
             x, y = self._center_for_element(element_id, elements)
             logger.debug(
                 f"Browser.click: locator click failed, falling back to coordinates ({x}, {y}): {exc}"

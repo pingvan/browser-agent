@@ -96,7 +96,7 @@ class SecurityLayer:
 
         match tool_name:
             case "click" | "hover" | "select_option":
-                ref: int = args.get("ref", -1)
+                ref: int = int(args.get("ref", args.get("element_id", -1)))
                 el = self._find_element(ref, page_state)
                 if el is None:
                     return False
@@ -106,7 +106,7 @@ class SecurityLayer:
             case "type_text":
                 if args.get("press_enter", False):
                     return True
-                ref = args.get("ref", -1)
+                ref = int(args.get("ref", args.get("element_id", -1)))
                 el = self._find_element(ref, page_state)
                 if el is None:
                     return False
@@ -123,14 +123,17 @@ class SecurityLayer:
     def _describe_action(self, tool_name: str, args: dict[str, Any]) -> str:
         match tool_name:
             case "click":
-                return f"Click on element [{args.get('ref')}]"
+                return f"Click on element [{args.get('ref', args.get('element_id'))}]"
             case "hover":
-                return f"Hover over element [{args.get('ref')}]"
+                return f"Hover over element [{args.get('ref', args.get('element_id'))}]"
             case "select_option":
-                return f"Select option '{args.get('value')}' in element [{args.get('ref')}]"
+                return (
+                    f"Select option '{args.get('value')}' in element "
+                    f"[{args.get('ref', args.get('element_id'))}]"
+                )
             case "type_text":
                 text = str(args.get("text", ""))
-                ref = args.get("ref")
+                ref = args.get("ref", args.get("element_id"))
                 press_enter: bool = args.get("press_enter", False)
                 suffix = " + press Enter (form submission)" if press_enter else ""
                 return f"Type '{text[:50]}' into element [{ref}]{suffix}"

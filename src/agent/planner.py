@@ -7,7 +7,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from src.agent.prompts import PLANNER_SYSTEM_PROMPT
-from src.agent.state import MemoryEntry, PlanStep, normalize_plan
+from src.agent.state import MemoryEntry, PlanStep, merge_replanned_plan
 from src.config.settings import PLAN_MODEL, TEMPERATURE
 from src.utils.logger import logger
 
@@ -24,14 +24,21 @@ class Planner:
         existing_plan: list[PlanStep] | None = None,
         replan_reason: str = "",
         action_history: Sequence[Mapping[str, Any]] | None = None,
+        current_url: str = "",
+        page_title: str = "",
+        page_summary: str = "",
+        current_plan_step: int = -1,
     ) -> tuple[list[PlanStep], str]:
         logger.debug(
             f"Planner.build_plan: task={task[:160]!r}, memory_entries={len(memory)}, "
-            f"existing_plan_steps={len(existing_plan or [])}, replan_reason={replan_reason[:160]!r}"
+            f"existing_plan_steps={len(existing_plan or [])}, replan_reason={replan_reason[:160]!r}, "
+            f"current_url={current_url[:120]!r}, current_plan_step={current_plan_step}"
         )
         if self._client is None:
             logger.debug("Planner.build_plan: no client, using fallback plan")
-            return normalize_plan(self._fallback_steps(task, existing_plan)), self._fallback_reason(
+            return merge_replanned_plan(
+                existing_plan, self._fallback_steps(task, existing_plan, current_url)
+            ), self._fallback_reason(
                 replan_reason
             )
 
@@ -41,6 +48,10 @@ class Planner:
             "existing_plan": existing_plan or [],
             "replan_reason": replan_reason,
             "action_history": action_history or [],
+            "current_url": current_url,
+            "page_title": page_title,
+            "page_summary": page_summary,
+            "current_plan_step": current_plan_step,
         }
 
         try:
@@ -58,7 +69,9 @@ class Planner:
             )
         except Exception as exc:
             logger.warning(f"Planner.build_plan: model call failed, using fallback plan: {exc}")
-            return normalize_plan(self._fallback_steps(task, existing_plan)), self._fallback_reason(
+            return merge_replanned_plan(
+                existing_plan, self._fallback_steps(task, existing_plan, current_url)
+            ), self._fallback_reason(
                 replan_reason
             )
 
@@ -68,7 +81,9 @@ class Planner:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             logger.warning(f"Planner.build_plan: invalid JSON, using fallback plan: {exc}")
-            return normalize_plan(self._fallback_steps(task, existing_plan)), self._fallback_reason(
+            return merge_replanned_plan(
+                existing_plan, self._fallback_steps(task, existing_plan, current_url)
+            ), self._fallback_reason(
                 replan_reason
             )
 
@@ -80,25 +95,35 @@ class Planner:
         steps = [str(step).strip() for step in steps_raw if str(step).strip()]
         if not steps:
             logger.warning("Planner.build_plan: model returned empty steps, using fallback plan")
-            steps = self._fallback_steps(task, existing_plan)
+            steps = self._fallback_steps(task, existing_plan, current_url)
 
         logger.debug(f"Planner.build_plan final steps: {steps}")
-        return normalize_plan(steps), reasoning
+        return merge_replanned_plan(existing_plan, steps), reasoning
 
-    def _fallback_steps(self, task: str, existing_plan: list[PlanStep] | None) -> list[str]:
+    def _fallback_steps(
+        self, task: str, existing_plan: list[PlanStep] | None, current_url: str
+    ) -> list[str]:
         completed = [
             step["description"]
             for step in (existing_plan or [])
             if step.get("status") == "done" and step.get("description")
         ]
 
-        generated = [
-            "Понять, на каком сайте и в каком разделе нужно выполнять задачу",
-            "Найти страницу или интерфейс, где можно выполнить запрос пользователя",
-            "Собрать важные факты и сохранить их в память",
-            "Выполнить основное действие по задаче",
-            "Проверить результат и подготовить отчёт пользователю",
-        ]
+        if current_url:
+            generated = [
+                "Подтвердить, что открыта нужная страница или раздел для задачи",
+                "Сохранить в память факты, которые понадобятся после смены страницы",
+                "Достичь основного наблюдаемого результата на странице",
+                "Проверить итоговое состояние и подготовить отчёт пользователю",
+            ]
+        else:
+            generated = [
+                "Открыть сайт или страницу, где можно выполнить запрос пользователя",
+                "Найти нужный раздел или интерфейс и подтвердить его открытие",
+                "Сохранить в память факты, которые понадобятся после смены страницы",
+                "Достичь основного наблюдаемого результата на странице",
+                "Проверить итоговое состояние и подготовить отчёт пользователю",
+            ]
 
         if "оплат" in task.lower() or "закаж" in task.lower() or "куп" in task.lower():
             generated[-1] = "Остановиться перед оплатой или подтверждением и спросить пользователя"

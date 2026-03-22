@@ -21,9 +21,10 @@ class PageAnalyzer:
         elements: list[ElementSnapshot],
         url: str,
         title: str,
+        page_content: str = "",
     ) -> str:
         if self._client is None or not screenshot_b64:
-            summary = self._fallback_summary(elements, url, title)
+            summary = self._fallback_summary(elements, url, title, page_content)
             logger.debug(
                 f"PageAnalyzer.analyze_page: using fallback summary for url={url}, elements={len(elements)}"
             )
@@ -43,6 +44,7 @@ class PageAnalyzer:
                                 "type": "text",
                                 "text": (
                                     f"URL: {url}\nTitle: {title}\n"
+                                    f"Visible content:\n{self._extract_visible_text(page_content)}\n"
                                     f"Interactive elements:\n{element_preview}"
                                 ),
                             },
@@ -59,11 +61,11 @@ class PageAnalyzer:
             )
         except Exception as exc:
             logger.warning(f"PageAnalyzer.analyze_page: model call failed, using fallback summary: {exc}")
-            return self._fallback_summary(elements, url, title)
+            return self._fallback_summary(elements, url, title, page_content)
 
         summary = (response.choices[0].message.content or "").strip()
         logger.debug(f"PageAnalyzer.analyze_page summary: {summary[:500]}")
-        return summary or self._fallback_summary(elements, url, title)
+        return summary or self._fallback_summary(elements, url, title, page_content)
 
     async def find_element(
         self,
@@ -131,7 +133,7 @@ class PageAnalyzer:
         return "\n".join(preview)
 
     def _fallback_summary(
-        self, elements: list[ElementSnapshot], url: str, title: str
+        self, elements: list[ElementSnapshot], url: str, title: str, page_content: str
     ) -> str:
         labels = []
         for element in elements[:8]:
@@ -144,9 +146,25 @@ class PageAnalyzer:
             labels.append(f'[{element.get("index", element.get("ref", "?"))}] {label}')
 
         summary = f'Страница "{title}" ({url}). Найдено {len(elements)} интерактивных элементов.'
+        visible_text = self._extract_visible_text(page_content)
+        if visible_text:
+            summary += f" Видимый текст: {visible_text[:280]}."
         if labels:
             summary += " В видимой области: " + ", ".join(labels[:5]) + "."
         return summary
+
+    def _extract_visible_text(self, page_content: str) -> str:
+        if not page_content:
+            return ""
+        marker = "## Page Content (summary)"
+        start = page_content.find(marker)
+        if start == -1:
+            return page_content[:400]
+        text = page_content[start + len(marker) :].strip()
+        next_marker = text.find("## Interactive Elements")
+        if next_marker != -1:
+            text = text[:next_marker]
+        return " ".join(text.split())[:400]
 
     def _fallback_find(self, elements: list[ElementSnapshot], question: str) -> str:
         lower_question = question.lower()

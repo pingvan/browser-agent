@@ -7,12 +7,21 @@ from src.agent.state import create_initial_state
 
 
 class _DummyBrowser:
-    async def observe(self) -> SimpleNamespace:
+    async def observe(self, *, capture_screenshot: bool = True) -> SimpleNamespace:
         return SimpleNamespace(
-            page_state=SimpleNamespace(url="about:blank", title="Blank"),
+            page_state=SimpleNamespace(
+                url="about:blank",
+                title="Blank",
+                content="## Current Page\nURL: about:blank\nTitle: Blank\n\n## Page Content (summary)\n(no visible text)\n\n## Interactive Elements\n",
+                elements=[],
+            ),
             screenshot_b64="",
             elements=[],
+            tab_count=1,
         )
+
+    async def take_annotated_screenshot(self, elements: list[dict[str, object]]) -> str:
+        return ""
 
 
 class _DummyPlanner:
@@ -33,12 +42,38 @@ class _DummySecurity:
         return True
 
 
+class _DummyTransitionAnalyzer:
+    async def analyze_transition(self, **kwargs) -> dict[str, object]:
+        return {
+            "reasoning": "transition analyzed",
+            "significant_change": True,
+            "progress_made": True,
+            "complete_current_step": False,
+            "step_result": "",
+            "task_completed": False,
+            "final_report": "",
+            "memory_updates": [],
+        }
+
+    async def evaluate_current_state(self, **kwargs) -> dict[str, object]:
+        return {
+            "reasoning": "state evaluated",
+            "progress_made": False,
+            "complete_current_step": False,
+            "step_result": "",
+            "task_completed": False,
+            "final_report": "",
+            "memory_updates": [],
+        }
+
+
 class GraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_graph_applies_state_updates_and_reaches_done_without_client(self) -> None:
         runtime = AgentRuntime(
             browser=cast(Any, _DummyBrowser()),
             planner=cast(Any, _DummyPlanner()),
             page_analyzer=cast(Any, _DummyAnalyzer()),
+            transition_analyzer=cast(Any, _DummyTransitionAnalyzer()),
             security_layer=cast(Any, _DummySecurity()),
             client=None,
         )

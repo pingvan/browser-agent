@@ -33,11 +33,58 @@ async def launch_browser() -> tuple[Playwright, BrowserContext, Page]:
     return playwright, context, page
 
 
-async def wait_for_page_ready(page: Page, load_timeout_ms: int = 10000) -> None:
+async def wait_for_page_ready(
+    page: Page,
+    load_timeout_ms: int = 10000,
+    *,
+    wait_for_dom_stability: bool = True,
+    render_buffer_ms: int = 150,
+) -> None:
     try:
         await page.wait_for_load_state("domcontentloaded", timeout=load_timeout_ms)
     except PlaywrightError:
         pass
+
+    if wait_for_dom_stability:
+        try:
+            await page.evaluate(
+                """
+                () => new Promise((resolve) => {
+                    const body = document.body || document.documentElement;
+                    if (!body) {
+                        resolve(false);
+                        return;
+                    }
+
+                    let lastSize = body.innerHTML.length;
+                    let stableCount = 0;
+                    const interval = setInterval(() => {
+                        const currentSize = body.innerHTML.length;
+                        if (currentSize === lastSize) {
+                            stableCount += 1;
+                            if (stableCount >= 3) {
+                                clearInterval(interval);
+                                clearTimeout(timeoutId);
+                                resolve(true);
+                            }
+                        } else {
+                            stableCount = 0;
+                            lastSize = currentSize;
+                        }
+                    }, 200);
+
+                    const timeoutId = setTimeout(() => {
+                        clearInterval(interval);
+                        resolve(false);
+                    }, 5000);
+                })
+                """
+            )
+        except PlaywrightError:
+            pass
+
+    if render_buffer_ms > 0:
+        await page.wait_for_timeout(render_buffer_ms)
 
 
 async def close_browser(context: BrowserContext, playwright: Playwright) -> None:

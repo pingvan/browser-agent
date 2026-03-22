@@ -16,12 +16,16 @@ from src.agent.prompts import SYSTEM_PROMPT, build_step_prompt
 from src.agent.state import (
     ActionRecord,
     AgentState,
+    MemoryEntry,
+    PlanStep,
+    build_page_fingerprint,
     create_initial_state,
     current_plan_step_id,
     mark_plan_step_done,
     refresh_history_summary,
     store_memory,
 )
+from src.agent.transition_analyzer import StateEvaluation, TransitionAnalysis, TransitionAnalyzer
 from src.browser.manager import BrowserManager
 from src.config.settings import (
     MAIN_MODEL,
@@ -36,7 +40,37 @@ from src.security.security_layer import SecurityLayer
 from src.utils.logger import logger
 
 _BROWSER_ACTIONS: frozenset[str] = frozenset(
-    {"click", "type", "type_text", "press_key", "navigate", "scroll", "go_back", "wait"}
+    {
+        "click",
+        "type",
+        "type_text",
+        "press_key",
+        "navigate",
+        "scroll",
+        "go_back",
+        "wait",
+        "get_tabs",
+        "switch_tab",
+    }
+)
+_KNOWN_ACTIONS: frozenset[str] = frozenset(
+    {
+        "click",
+        "type",
+        "type_text",
+        "press_key",
+        "navigate",
+        "scroll",
+        "go_back",
+        "wait",
+        "get_tabs",
+        "switch_tab",
+        "save_memory",
+        "complete_plan_step",
+        "replan",
+        "ask_user",
+        "done",
+    }
 )
 
 
@@ -45,6 +79,7 @@ class AgentRuntime:
     browser: BrowserManager
     planner: Planner
     page_analyzer: PageAnalyzer
+    transition_analyzer: TransitionAnalyzer
     security_layer: SecurityLayer
     client: AsyncOpenAI | None
 
@@ -89,6 +124,43 @@ def _format_actions_for_log(actions: list[dict[str, Any]]) -> str:
     )
 
 
+def _should_capture_visual_context(state: AgentState, *, has_cached_summary: bool, element_count: int) -> bool:
+    return bool(
+        state.get("retry_count", 0) > 0
+        or state.get("repeated_noop_count", 0) > 0
+        or element_count == 0
+        or (not has_cached_summary and state.get("steps_since_last_plan_progress", 0) > 0)
+    )
+
+
+def _update_summary_cache(
+    cache: dict[str, str], fingerprint: str, summary: str, *, max_entries: int = 20
+) -> dict[str, str]:
+    updated = dict(cache)
+    if fingerprint and summary:
+        updated[fingerprint] = summary
+    while len(updated) > max_entries:
+        oldest_key = next(iter(updated))
+        updated.pop(oldest_key, None)
+    return updated
+
+
+def _append_recent_fingerprint(
+    history: list[str], fingerprint: str, *, max_entries: int = 6
+) -> list[str]:
+    updated = [entry for entry in history if entry]
+    if fingerprint:
+        updated.append(fingerprint)
+    return updated[-max_entries:]
+
+
+def _is_two_page_oscillation(history: list[str]) -> bool:
+    if len(history) < 4:
+        return False
+    first, second, third, fourth = history[-4:]
+    return bool(first and second and first != second and first == third and second == fourth)
+
+
 def _langgraph_symbols() -> tuple[Any, Any, Any]:
     try:
         module = importlib.import_module("langgraph.graph")
@@ -110,6 +182,7 @@ async def run_agent_graph(task: str, page: Page, context: BrowserContext) -> str
         browser=BrowserManager(page, context),
         planner=Planner(client),
         page_analyzer=PageAnalyzer(client),
+        transition_analyzer=TransitionAnalyzer(client),
         security_layer=SecurityLayer(),
         client=client,
     )
@@ -154,7 +227,15 @@ def build_agent_graph(runtime: AgentRuntime) -> Any:
 
     workflow.add_edge(START, "plan")
     workflow.add_edge("plan", "observe")
-    workflow.add_edge("observe", "think")
+    workflow.add_conditional_edges(
+        "observe",
+        route_after_observe,
+        {
+            "continue": "think",
+            "replan": "plan",
+            "end": END,
+        },
+    )
     workflow.add_edge("think", "act")
     workflow.add_conditional_edges(
         "act",
@@ -184,6 +265,10 @@ async def plan_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
         existing_plan=state.get("plan", []),
         replan_reason=replan_reason,
         action_history=state.get("action_history", []),
+        current_url=state.get("current_url", ""),
+        page_title=state.get("page_title", ""),
+        page_summary=state.get("page_summary", ""),
+        current_plan_step=state.get("current_plan_step", -1),
     )
     logger.info(
         f"PLAN: built {len(plan)} steps, current_step={current_plan_step_id(plan)}, "
@@ -204,26 +289,296 @@ async def observe_node(state: AgentState, runtime: AgentRuntime) -> dict[str, An
         f"OBSERVE: step={state.get('step_count', 0) + 1}, "
         f"url={state.get('current_url', '') or '(before first observation)'}"
     )
-    observation = await runtime.browser.observe()
-    page_summary = await runtime.page_analyzer.analyze_page(
-        screenshot_b64=observation.screenshot_b64,
-        elements=observation.elements,
+    observation = await runtime.browser.observe(capture_screenshot=False)
+    page_fingerprint = build_page_fingerprint(
         url=observation.page_state.url,
         title=observation.page_state.title,
+        elements=observation.elements,
+        tab_count=observation.tab_count,
     )
+    summary_cache = dict(state.get("cached_page_summary", {}))
+    has_cached_summary = page_fingerprint in summary_cache
+    capture_visual_context = _should_capture_visual_context(
+        state,
+        has_cached_summary=has_cached_summary,
+        element_count=len(observation.elements),
+    )
+    screenshot_b64 = ""
+    if capture_visual_context:
+        screenshot_b64 = await runtime.browser.take_annotated_screenshot(observation.page_state.elements)
+
+    if has_cached_summary:
+        page_summary = summary_cache[page_fingerprint]
+    else:
+        page_summary = await runtime.page_analyzer.analyze_page(
+            screenshot_b64=screenshot_b64,
+            elements=observation.elements,
+            url=observation.page_state.url,
+            title=observation.page_state.title,
+            page_content=observation.page_state.content,
+        )
+        summary_cache = _update_summary_cache(summary_cache, page_fingerprint, page_summary)
     logger.info(
         f"OBSERVE: title={_truncate(observation.page_state.title, 100)}, "
         f"elements={len(observation.elements)}, "
-        f"screenshot={'yes' if observation.screenshot_b64 else 'no'}"
+        f"screenshot={'yes' if screenshot_b64 else 'no'}"
     )
     logger.debug(f"OBSERVE summary: {_truncate(page_summary, 500)}")
-    return {
+    updates: dict[str, Any] = {
         "current_url": observation.page_state.url,
         "page_title": observation.page_state.title,
         "page_summary": page_summary,
+        "page_fingerprint": page_fingerprint,
         "interactive_elements": observation.elements,
-        "screenshot_b64": observation.screenshot_b64,
+        "screenshot_b64": screenshot_b64,
+        "status": state.get("status", "running"),
+        "last_error": "",
+        "transition_summary": "",
+        "needs_transition_analysis": False,
+        "cached_page_summary": summary_cache,
     }
+    recent_page_fingerprints = _append_recent_fingerprint(
+        list(state.get("recent_page_fingerprints", [])),
+        page_fingerprint,
+    )
+    updates["recent_page_fingerprints"] = recent_page_fingerprints
+    plan = [cast(PlanStep, step.copy()) for step in state.get("plan", [])]
+    memory = [cast(MemoryEntry, entry.copy()) for entry in state.get("memory", [])]
+    current_plan_step = state.get("current_plan_step", -1)
+    status = state.get("status", "running")
+    final_report = state.get("final_report", "")
+    last_error = state.get("last_error", "")
+    progress_made = False
+    step_completed = False
+    summary_notes: list[str] = []
+    repeated_noop_count = state.get("repeated_noop_count", 0)
+    oscillating_pages = _is_two_page_oscillation(recent_page_fingerprints)
+    pending_transition_check = bool(
+        state.get("needs_transition_analysis", False) and state.get("last_action") is not None
+    )
+
+    if pending_transition_check:
+        after_state = AgentState(
+            current_url=observation.page_state.url,
+            page_title=observation.page_state.title,
+            page_summary=page_summary,
+            page_fingerprint=page_fingerprint,
+            interactive_elements=observation.elements,
+        )
+        analysis = await runtime.transition_analyzer.analyze_transition(
+            task=state.get("task", ""),
+            plan=state.get("plan", []),
+            current_plan_step=state.get("current_plan_step", -1),
+            last_action=state.get("last_action"),
+            last_action_result=state.get("last_action_result"),
+            before_state=state,
+            after_state=after_state,
+            allow_llm=bool(
+                state.get("retry_count", 0) > 0
+                or state.get("steps_since_last_plan_progress", 0) > 0
+            ),
+        )
+        logger.info(
+            "TRANSITION: "
+            f"significant_change={analysis['significant_change']}, "
+            f"progress_made={analysis['progress_made']}, "
+            f"complete_step={analysis['complete_current_step']}, "
+            f"task_completed={analysis['task_completed']}"
+        )
+        logger.debug(f"TRANSITION reasoning: {_truncate(analysis['reasoning'], 500)}")
+        if analysis["memory_updates"]:
+            logger.debug(f"TRANSITION memory_updates: {analysis['memory_updates']}")
+
+        if analysis["reasoning"]:
+            summary_notes.append(f"transition: {analysis['reasoning']}")
+
+        (
+            plan,
+            current_plan_step,
+            memory,
+            progress_delta,
+            step_completed_delta,
+            task_completed,
+            report_from_analysis,
+        ) = _apply_semantic_analysis(
+            state=state,
+            plan=plan,
+            current_plan_step=current_plan_step,
+            memory=memory,
+            analysis=analysis,
+            source=f"transition after {render_action_name(state.get('last_action') or {})}",
+            allow_step_completion=not step_completed,
+        )
+        progress_made = progress_made or progress_delta
+        step_completed = step_completed or step_completed_delta
+        repeated_noop_count = 0 if analysis["significant_change"] else repeated_noop_count + 1
+        updates["last_action"] = None
+        updates["last_action_result"] = None
+        if oscillating_pages and not progress_made and status == "running":
+            status = "replan"
+            last_error = (
+                "Detected oscillation between two page states without plan progress. "
+                "Choose a different action or rebuild the plan from the current page."
+            )
+            summary_notes.append("transition: detected A-B-A-B page oscillation without progress")
+            logger.warning(
+                "OBSERVE: scheduling replan after detecting two-page oscillation without progress"
+            )
+        if task_completed:
+            status = "done"
+            final_report = report_from_analysis
+            last_error = ""
+
+    elif status == "running":
+        state_evaluation = await runtime.transition_analyzer.evaluate_current_state(
+            task=state.get("task", ""),
+            plan=plan,
+            current_plan_step=current_plan_step,
+            memory=memory,
+            state=AgentState(
+                task=state.get("task", ""),
+                plan=plan,
+                current_plan_step=current_plan_step,
+                memory=memory,
+                current_url=observation.page_state.url,
+                page_title=observation.page_state.title,
+                page_summary=page_summary,
+                page_fingerprint=page_fingerprint,
+                interactive_elements=observation.elements,
+            ),
+            allow_llm=bool(
+                state.get("retry_count", 0) > 0
+                or state.get("steps_since_last_plan_progress", 0) > 0
+                or state.get("repeated_noop_count", 0) > 0
+            ),
+        )
+        logger.info(
+            "STATE_CHECK: "
+            f"progress_made={state_evaluation['progress_made']}, "
+            f"complete_step={state_evaluation['complete_current_step']}, "
+            f"task_completed={state_evaluation['task_completed']}"
+        )
+        logger.debug(f"STATE_CHECK reasoning: {_truncate(state_evaluation['reasoning'], 500)}")
+        if state_evaluation["memory_updates"]:
+            logger.debug(f"STATE_CHECK memory_updates: {state_evaluation['memory_updates']}")
+        if state_evaluation["reasoning"]:
+            summary_notes.append(f"state: {state_evaluation['reasoning']}")
+
+        (
+            plan,
+            current_plan_step,
+            memory,
+            progress_delta,
+            step_completed_delta,
+            task_completed,
+            report_from_evaluation,
+        ) = _apply_semantic_analysis(
+            state=state,
+            plan=plan,
+            current_plan_step=current_plan_step,
+            memory=memory,
+            analysis=state_evaluation,
+            source="state evaluation",
+            allow_step_completion=not step_completed,
+        )
+        progress_made = progress_made or progress_delta
+        step_completed = step_completed or step_completed_delta
+        if task_completed:
+            status = "done"
+            final_report = report_from_evaluation
+            last_error = ""
+
+    if progress_made or status == "done":
+        repeated_noop_count = 0
+
+    updates["plan"] = plan
+    updates["current_plan_step"] = current_plan_step
+    updates["memory"] = memory
+    updates["status"] = status
+    updates["final_report"] = final_report
+    updates["last_error"] = last_error
+    updates["transition_summary"] = "\n".join(summary_notes)
+    updates["repeated_noop_count"] = repeated_noop_count
+
+    if status == "done":
+        updates["steps_since_last_plan_progress"] = 0
+        return updates
+
+    if progress_made:
+        updates["steps_since_last_plan_progress"] = 0
+        updates["last_error"] = ""
+    elif pending_transition_check:
+        new_steps_since = state.get("steps_since_last_plan_progress", 0) + 1
+        updates["steps_since_last_plan_progress"] = new_steps_since
+        if new_steps_since >= STEPS_BEFORE_AUTO_REPLAN:
+            updates["status"] = "replan"
+            updates["last_error"] = (
+                summary_notes[-1]
+                if summary_notes
+                else f"No meaningful progress after {new_steps_since} observed transitions."
+            )
+            logger.warning(
+                f"OBSERVE: scheduling replan after {new_steps_since} transitions without progress"
+            )
+    else:
+        updates["steps_since_last_plan_progress"] = state.get("steps_since_last_plan_progress", 0)
+
+    return updates
+
+
+def _apply_semantic_analysis(
+    *,
+    state: AgentState,
+    plan: list[PlanStep],
+    current_plan_step: int,
+    memory: list[MemoryEntry],
+    analysis: TransitionAnalysis | StateEvaluation,
+    source: str,
+    allow_step_completion: bool,
+) -> tuple[list[PlanStep], int, list[MemoryEntry], bool, bool, bool, str]:
+    progress_made = bool(analysis["progress_made"])
+    step_completed = False
+
+    for memory_item in analysis["memory_updates"]:
+        memory = store_memory(
+            memory,
+            key=memory_item["key"],
+            value=memory_item["value"],
+            source=source,
+        )
+
+    if allow_step_completion and analysis["complete_current_step"] and 0 <= current_plan_step < len(plan):
+        completed_step = current_plan_step
+        plan, current_plan_step, applied = mark_plan_step_done(
+            cast(Any, plan),
+            current_plan_step,
+            analysis["step_result"] or analysis["reasoning"],
+        )
+        if applied:
+            logger.info(
+                f"AUTO_PLAN_SYNC: completed step {completed_step} from {source}"
+            )
+        progress_made = progress_made or applied
+        step_completed = applied
+
+    task_completed = bool(analysis["task_completed"])
+    final_report = ""
+    if task_completed:
+        final_report = (
+            analysis["final_report"]
+            or analysis["step_result"]
+            or "Task completed after semantic state evaluation."
+        )
+
+    return (
+        plan,
+        current_plan_step,
+        memory,
+        progress_made,
+        step_completed,
+        task_completed,
+        final_report,
+    )
 
 
 async def think_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
@@ -331,6 +686,9 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
         "planned_actions": [],
         "next_action": None,
         "step_count": state.get("step_count", 0) + 1,
+        "last_action": None,
+        "last_action_result": None,
+        "needs_transition_analysis": False,
     }
 
     if not actions:
@@ -351,18 +709,22 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
         updates["steps_since_last_plan_progress"] = state.get("steps_since_last_plan_progress", 0) + 1
         return updates
 
-    plan = cast(list[dict[str, Any]], [step.copy() for step in state.get("plan", [])])
-    memory = list(state.get("memory", []))
+    plan = [cast(PlanStep, step.copy()) for step in state.get("plan", [])]
+    memory = [cast(MemoryEntry, entry.copy()) for entry in state.get("memory", [])]
     history = list(state.get("action_history", []))
     current_step = state.get("current_plan_step", -1)
-    steps_without_progress = state.get("steps_since_last_plan_progress", 0) + 1
+    current_steps_without_progress = state.get("steps_since_last_plan_progress", 0)
     retry_count = state.get("retry_count", 0)
+    repeated_noop_count = state.get("repeated_noop_count", 0)
     status = state.get("status", "running")
     final_report = state.get("final_report", "")
     last_error = ""
+    last_action_fingerprint = str(state.get("last_action_fingerprint", ""))
+    last_action_signature = str(state.get("last_action_signature", ""))
     user_response = None
     progress_made = False
     browser_action_executed = False
+    unresolved_progress = False
 
     for action in actions:
         normalized = normalize_action(action)
@@ -381,6 +743,7 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
                 value=value,
                 source=reason or f"step {updates['step_count']}",
             )
+            progress_made = True
             history.append(
                 ActionRecord(
                     step=updates["step_count"],
@@ -400,7 +763,6 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
             plan, current_step, applied = mark_plan_step_done(cast(Any, plan), step_id, result_text)
             progress_made = progress_made or applied
             if applied:
-                steps_without_progress = 0
                 retry_count = 0
             history.append(
                 ActionRecord(
@@ -438,6 +800,7 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
                 value=answer,
                 source=question,
             )
+            progress_made = True
             history.append(
                 ActionRecord(
                     step=updates["step_count"],
@@ -465,6 +828,29 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
         if browser_action_executed:
             break
 
+        action_signature = render_action_name(normalized)
+        if (
+            repeated_noop_count >= 1
+            and last_action_fingerprint
+            and last_action_fingerprint == str(state.get("page_fingerprint", ""))
+            and last_action_signature == action_signature
+        ):
+            status = "replan"
+            last_error = (
+                "Repeated the same browser action on an unchanged page fingerprint. "
+                "Choose an alternative action or replan."
+            )
+            logger.warning(f"ACT: blocked repeated no-op action {action_signature}")
+            history.append(
+                ActionRecord(
+                    step=updates["step_count"],
+                    action="replan",
+                    result=last_error,
+                    success=True,
+                )
+            )
+            break
+
         try:
             logger.info(f"BROWSER_ACTION: {render_action_name(normalized)}")
             logger.debug(
@@ -483,6 +869,12 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
             )
             retry_count = 0
             browser_action_executed = True
+            unresolved_progress = True
+            last_action_fingerprint = str(state.get("page_fingerprint", ""))
+            last_action_signature = action_signature
+            updates["last_action"] = normalized
+            updates["last_action_result"] = result
+            updates["needs_transition_analysis"] = True
         except Exception as exc:
             last_error = str(exc)
             logger.warning(
@@ -497,6 +889,7 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
                 )
             )
             retry_count += 1
+            current_steps_without_progress += 1
             if retry_count >= MAX_RETRIES_PER_STEP:
                 status = "replan"
             break
@@ -507,7 +900,15 @@ async def act_node(state: AgentState, runtime: AgentRuntime) -> dict[str, Any]:
     updates["action_history"] = history
     updates["history_summary"] = refresh_history_summary(history)
     updates["retry_count"] = retry_count
-    updates["steps_since_last_plan_progress"] = 0 if progress_made else steps_without_progress
+    updates["repeated_noop_count"] = repeated_noop_count
+    updates["last_action_fingerprint"] = last_action_fingerprint
+    updates["last_action_signature"] = last_action_signature
+    if progress_made:
+        updates["steps_since_last_plan_progress"] = 0
+    elif unresolved_progress:
+        updates["steps_since_last_plan_progress"] = current_steps_without_progress
+    else:
+        updates["steps_since_last_plan_progress"] = current_steps_without_progress + 1
     updates["status"] = status
     updates["final_report"] = final_report
     updates["user_response"] = user_response
@@ -537,16 +938,25 @@ def route_after_act(state: AgentState) -> str:
             f"ROUTE: replan due to status=replan, reason={_truncate(state.get('last_error', ''), 200)}"
         )
         return "replan"
-    if state.get("steps_since_last_plan_progress", 0) >= STEPS_BEFORE_AUTO_REPLAN:
-        logger.warning(
-            "ROUTE: auto replan due to no progress "
-            f"for {state.get('steps_since_last_plan_progress', 0)} steps"
-        )
-        return "replan"
     logger.debug(
         f"ROUTE: continue, status={status}, step_count={state.get('step_count', 0)}, "
         f"steps_since_progress={state.get('steps_since_last_plan_progress', 0)}"
     )
+    return "continue"
+
+
+def route_after_observe(state: AgentState) -> str:
+    status = state.get("status", "running")
+    if status in {"done", "need_input", "error"}:
+        logger.info(
+            f"ROUTE_OBSERVE: end due to terminal status={status}, step_count={state.get('step_count', 0)}"
+        )
+        return "end"
+    if status == "replan":
+        logger.info(
+            f"ROUTE_OBSERVE: replan due to status=replan, reason={_truncate(state.get('last_error', ''), 200)}"
+        )
+        return "replan"
     return "continue"
 
 
@@ -601,16 +1011,10 @@ def parse_think_response(raw: str) -> tuple[str, list[dict[str, Any]]]:
 
 
 def normalize_action(action: dict[str, Any]) -> dict[str, Any]:
-    if "action" in action:
+    if "action" in action and str(action.get("action", "")).strip():
         normalized = dict(action)
-    elif len(action) == 1:
-        name, payload = next(iter(action.items()))
-        if isinstance(payload, dict):
-            normalized = {"action": name, **payload}
-        else:
-            normalized = {"action": name}
     else:
-        normalized = dict(action)
+        normalized = _normalize_shorthand_action(action)
 
     action_name = str(normalized.get("action", "")).strip()
     if action_name == "type_text":
@@ -619,7 +1023,53 @@ def normalize_action(action: dict[str, Any]) -> dict[str, Any]:
 
     if "ref" in normalized and "element_id" not in normalized:
         normalized["element_id"] = normalized["ref"]
+    if "element_id" in normalized:
+        normalized["element_id"] = _coerce_numeric(normalized["element_id"])
+    if "step_id" in normalized:
+        normalized["step_id"] = _coerce_numeric(normalized["step_id"])
+    if "index" in normalized:
+        normalized["index"] = _coerce_numeric(normalized["index"])
     return normalized
+
+
+def _normalize_shorthand_action(action: dict[str, Any]) -> dict[str, Any]:
+    recognized_keys = [key for key in action if key in _KNOWN_ACTIONS]
+    if len(recognized_keys) != 1:
+        return dict(action)
+
+    action_name = recognized_keys[0]
+    payload = action[action_name]
+    extras = {key: value for key, value in action.items() if key != action_name}
+    normalized: dict[str, Any] = {"action": action_name, **extras}
+
+    if isinstance(payload, dict):
+        normalized.update(payload)
+        return normalized
+
+    field_name = {
+        "click": "element_id",
+        "type": "text",
+        "type_text": "text",
+        "press_key": "key",
+        "navigate": "url",
+        "scroll": "direction",
+        "wait": "seconds",
+        "switch_tab": "index",
+        "complete_plan_step": "step_id",
+        "ask_user": "question",
+        "done": "summary",
+        "replan": "reason",
+    }.get(action_name)
+
+    if field_name:
+        normalized[field_name] = payload
+    return normalized
+
+
+def _coerce_numeric(value: Any) -> Any:
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return value
 
 
 def fallback_action(state: AgentState, *, reason: str) -> dict[str, Any]:
@@ -663,6 +1113,10 @@ async def execute_browser_action(
         return await runtime.browser.go_back()
     if action_name == "wait":
         return await runtime.browser.wait(float(action.get("seconds", 2.0)))
+    if action_name == "get_tabs":
+        return await runtime.browser.get_tabs()
+    if action_name == "switch_tab":
+        return await runtime.browser.switch_tab(int(action.get("index", 0)))
 
     raise ValueError(f"Unsupported browser action: {action_name}")
 
@@ -750,4 +1204,6 @@ def render_action_name(action: dict[str, Any]) -> str:
         return f"navigate({action.get('url', '')})"
     if name == "scroll":
         return f"scroll({action.get('direction', 'down')})"
+    if name == "switch_tab":
+        return f"switch_tab({action.get('index', '?')})"
     return name

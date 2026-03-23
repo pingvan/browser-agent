@@ -6,7 +6,7 @@ Architecture:
 - Vision (screenshots) + interactive elements list
 - Tools: click, navigate, type_text, scroll, press_key, go_back,
          get_tabs, switch_tab, wait,
-         inspect_dom, save_memory, ask_user, done
+         save_memory, ask_user, done
 - Overlay/shadow DOM detection (isTopElement + detectOverlay)
 - Persistent durable memory (save_memory)
 - Loop detection (code-level enforcement)
@@ -42,7 +42,7 @@ Rules:
 - On step 1: set evaluation_previous_goal = "Initial step, no previous action."
 - action must contain at least one tool call.
 - One browser action per step (click, navigate, type_text, scroll, press_key, go_back, wait).
-  Multiple state actions (save_memory, inspect_dom) may accompany one browser action.
+  Multiple state actions (save_memory) may accompany one browser action.
 - done must be the only action in its step.
 </output_format>
 
@@ -132,13 +132,12 @@ If 2 clicks produced no change, STOP and think about what you actually need to d
 
 <action_rules>
 One browser action per step: click, navigate, type_text, scroll, press_key, go_back, wait.
-State actions (save_memory, inspect_dom) may be combined with a browser action.
+State actions (save_memory) may be combined with a browser action.
 
 Valid combinations in a single step:
   - save_memory + click
   - save_memory + navigate
   - save_memory + save_memory + click (multiple saves allowed)
-  - inspect_dom (standalone, when you need detailed DOM information)
 
 Forbidden:
   - Two browser actions in one step (click + navigate, click + scroll)
@@ -154,12 +153,7 @@ How to use the screenshot:
 - If an element is visible on the screenshot but absent from the list, it may be occluded by an overlay
 - If overlay status is detected, a modal or popup is present; interact ONLY with overlay elements
 - If the screenshot shows a blank or loading page, use wait
-
-Use inspect_dom only when the screenshot is insufficient:
-- You need to find the exact element_id for a hidden element
-- You need to verify whether a specific element exists in the DOM
-- Text on the screenshot is unreadable
-Do NOT call inspect_dom routinely -- only when you have a specific question.
+- If the screenshot is ambiguous, prefer another observation step, scrolling, direct navigation, or a different visible route.
 </visual_reasoning>
 
 <overlay_handling>
@@ -205,7 +199,7 @@ When you land on a page and need to find a specific feature (cart, orders, profi
 3. If not found: look for a profile/account/menu button -- features are often nested there.
 4. If not found: try navigating directly to common URL patterns
    (append /cart, /orders, /history, /account to the base URL).
-5. If not found: use inspect_dom to search the full DOM.
+5. If not found: stop brute-forcing and switch to a different route you can verify from the screenshot or URL.
 Do NOT click random product/category links hoping to find navigation.
 </site_exploration>
 
@@ -219,7 +213,7 @@ If you receive a Loop Warning:
    - A different element on the page
    - A different navigation route (navigate instead of click)
    - scroll to reveal hidden elements
-   - inspect_dom to understand page structure
+   - re-read the visible text and interactive elements before acting again
    - save_memory to capture already-found data and move on
 
 If the same page has been visited 3 or more times:
@@ -282,7 +276,7 @@ If the page is not loading:
 
 If you cannot find an element:
 - scroll down or up to reveal hidden elements
-- inspect_dom with a specific question
+- try a different visible route or a direct URL
 - Consider whether the element might be outside the viewport
 </error_recovery>
 
@@ -290,40 +284,11 @@ If you cannot find an element:
 Minimize the number of steps:
 - Combine save_memory with a browser action in one step whenever possible.
 - If you know the URL, navigate directly instead of clicking through a chain of links.
-- If data is visible on the screenshot, call save_memory immediately without calling inspect_dom.
+- If data is visible on the screenshot, call save_memory immediately.
 
 Minimize token usage:
-- Do not call inspect_dom if the screenshot provides enough information.
 - The memory field in your JSON response is an ephemeral working note for this step.
   save_memory is for durable facts that survive context compression. Do not confuse them.
 - Do not duplicate save_memory for data that is already saved.
 </efficiency>
-""".strip()
-
-
-# ============================================================
-# DOM Inspector prompt (on-demand tool)
-# ============================================================
-
-DOM_INSPECTOR_PROMPT = """
-You are a DOM specialist for a browser agent.
-
-You analyze only the DOM, visible page text, and the list of interactive elements.
-You do NOT choose the next action -- you answer a specific question.
-
-Respond with strict JSON:
-{
-  "answer": "short answer to the DOM question",
-  "observations": ["...", "..."],
-  "candidate_elements": [
-    {"element_id": 12, "reason": "why this element is relevant"}
-  ]
-}
-
-Requirements:
-- Write only what is directly evident from the DOM, page text, and interactive elements.
-- Include candidate_elements only when there is an explicit element_id.
-- Your main job is to verify whether the target element exists in the DOM, how it is labeled, and what its element_id is.
-- Note menus, dialogs, forms, links, and buttons if they are explicitly present in the DOM.
-- Do not invent hidden states or suggest a task execution route.
 """.strip()

@@ -51,20 +51,6 @@ class StepRecord(TypedDict, total=False):
     page_changed: bool
 
 
-class InspectionCandidate(TypedDict):
-    element_id: int
-    reason: str
-
-
-class InspectionResult(TypedDict, total=False):
-    question: str
-    answer: str
-    observations: list[str]
-    candidate_elements: list[InspectionCandidate]
-    source: Literal["dom", "vision"]
-    fingerprint: str
-
-
 class PageSummary(TypedDict, total=False):
     summary: str
     salient_facts: list[str]
@@ -77,7 +63,6 @@ class AgentState(TypedDict, total=False):
 
     memory: list[MemoryEntry]
     step_history: list[StepRecord]
-    last_dom_inspection: InspectionResult
 
     current_url: str
     page_title: str
@@ -126,14 +111,6 @@ def create_initial_state(task: str) -> AgentState:
         status="running",
         memory=[],
         step_history=[],
-        last_dom_inspection=InspectionResult(
-            question="",
-            answer="",
-            observations=[],
-            candidate_elements=[],
-            source="dom",
-            fingerprint="",
-        ),
         current_url="",
         page_title="",
         page_content="",

@@ -6,7 +6,6 @@ from typing import Any
 from src.agent.schema import AgentOutput
 from src.agent.state import (
     AgentState,
-    InspectionResult,
     render_memory,
 )
 from src.config.settings import (
@@ -207,13 +206,6 @@ class MessageManager:
         if excerpt:
             sections.extend(["", "## Visible Page Text", excerpt])
 
-        # DOM inspection result (if available for this page)
-        dom_inspection = state.get("last_dom_inspection")
-        if dom_inspection:
-            inspection_text = self._render_inspection(dom_inspection)
-            if inspection_text:
-                sections.extend(["", "## DOM Inspection", inspection_text])
-
         # Interactive elements
         sections.extend(["", "## Interactive Elements", self._render_elements(state)])
 
@@ -364,28 +356,6 @@ class MessageManager:
     # ------------------------------------------------------------------
     # Internal: rendering helpers
     # ------------------------------------------------------------------
-
-    def _render_inspection(self, inspection: InspectionResult) -> str:
-        question = str(inspection.get("question", "")).strip()
-        answer = str(inspection.get("answer", "")).strip()
-        observations = inspection.get("observations", [])
-        candidates = inspection.get("candidate_elements", [])
-        if not (question or answer or observations or candidates):
-            return ""
-
-        lines: list[str] = []
-        if question:
-            lines.append(f"Question: {question}")
-        if answer:
-            lines.append(f"Answer: {answer}")
-        if observations:
-            lines.append("Observations: " + " | ".join(str(o) for o in observations[:4]))
-        if candidates:
-            rendered = []
-            for c in candidates[:5]:
-                rendered.append(f'[{c.get("element_id", "?")}] {str(c.get("reason", "")).strip()}')
-            lines.append("DOM candidates: " + " | ".join(rendered))
-        return "\n".join(lines)
 
     def _render_elements(self, state: AgentState) -> str:
         lines: list[str] = []

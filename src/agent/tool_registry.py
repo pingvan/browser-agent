@@ -131,22 +131,6 @@ class ToolRegistry:
                     },
                 ),
                 ToolSpec(
-                    name="inspect_dom",
-                    description="Ask the DOM specialist to analyze the current page structure and element ids.",
-                    category="state",
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "question": {
-                                "type": "string",
-                                "description": "Specific DOM question about controls, menus, links, forms, or order/cart UI.",
-                            }
-                        },
-                        "required": ["question"],
-                        "additionalProperties": False,
-                    },
-                ),
-                ToolSpec(
                     name="save_memory",
                     description="Save a durable factual memory that will be useful on later pages.",
                     category="state",
@@ -247,10 +231,6 @@ class ToolRegistry:
                 float(arguments["seconds"])
             except (TypeError, ValueError):
                 return "wait.seconds must be numeric"
-
-        if name == "inspect_dom":
-            if not isinstance(arguments.get("question"), str):
-                return "inspect_dom.question must be a string"
 
         return None
 

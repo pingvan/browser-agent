@@ -11,7 +11,6 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from playwright.async_api import BrowserContext, Page
 
-from src.agent.inspection import DomInspector
 from src.agent.loop_detector import LoopDetector
 from src.agent.message_manager import MessageManager
 from src.agent.prompts import MAIN_AGENT_SYSTEM_PROMPT
@@ -19,7 +18,6 @@ from src.agent.schema import AgentOutput
 from src.agent.state import (
     AgentState,
     ElementSnapshot,
-    InspectionResult,
     append_recent_item,
     append_step_history,
     build_page_fingerprint,
@@ -38,7 +36,6 @@ from src.config.settings import (
     TEMPERATURE,
     get_openai_api_key,
 )
-from src.parser.page_parser import PageState
 from src.security.classifier import SecurityClassifier
 from src.security.gate import SecurityGate
 from src.security.security_layer import SecurityLayer
@@ -84,7 +81,6 @@ class Agent:
         security_layer: SecurityLayer | None = None,
         security_classifier: SecurityClassifier | None = None,
         security_gate: SecurityGate | None = None,
-        dom_inspector: DomInspector | None = None,
         message_manager: MessageManager | None = None,
         tool_registry: ToolRegistry | None = None,
         loop_detector: LoopDetector | None = None,
@@ -110,7 +106,6 @@ class Agent:
         else:
             self.security_classifier = None
             self.security_gate = None
-        self.dom_inspector = dom_inspector or DomInspector(client)
         self.message_manager = message_manager or MessageManager()
         self.tool_registry = tool_registry or ToolRegistry()
         self.loop_detector = loop_detector or LoopDetector()
@@ -321,7 +316,6 @@ class Agent:
     # ------------------------------------------------------------------
 
     async def _observe(self, state: AgentState, *, force_visual: bool) -> None:
-        previous_fingerprint = state.get("page_fingerprint", "")
         observation = await self.browser.observe(capture_screenshot=True)
         fingerprint = build_page_fingerprint(
             url=observation.page_state.url,
@@ -345,15 +339,6 @@ class Agent:
             state.get("recent_page_fingerprints", []),
             fingerprint,
         )
-        if previous_fingerprint and previous_fingerprint != fingerprint:
-            state["last_dom_inspection"] = InspectionResult(
-                question="",
-                answer="",
-                observations=[],
-                candidate_elements=[],
-                source="dom",
-                fingerprint="",
-            )
         state["prompt_injection_warnings"] = self.security_layer.check_prompt_injection(
             observation.page_state
         )
@@ -629,33 +614,6 @@ class Agent:
         step_tool_names: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
         """Execute a non-browser tool. Returns {"stop": bool, "data": dict}."""
-        if name == "inspect_dom":
-            question = str(arguments["question"]).strip()
-            result = await self.dom_inspector.inspect(
-                question=question,
-                page_state=self._build_current_page_state(state),
-                elements=state.get("interactive_elements", []),
-                fingerprint=state.get("page_fingerprint", ""),
-            )
-            state["last_dom_inspection"] = result
-            logger.info(
-                "DOM_INSPECTION:\n"
-                f"Question: {question}\n"
-                f"Answer: {_truncate(result.get('answer', ''), 240)}"
-            )
-            state["retry_count"] = 0
-            state["invalid_tool_calls"] = 0
-            state["consecutive_failures"] = 0
-            state["last_error"] = ""
-            return {
-                "stop": False,
-                "data": {
-                    "answer": result.get("answer", ""),
-                    "observations": result.get("observations", []),
-                    "candidate_elements": result.get("candidate_elements", []),
-                },
-            }
-
         if name == "save_memory":
             key = str(arguments["key"]).strip()
             value = str(arguments["value"]).strip()
@@ -736,10 +694,6 @@ class Agent:
         self._record_failure(state, action=name, result="Unsupported state tool.")
         return {"stop": True, "data": {"error": "Unsupported state tool."}}
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def _replace_last_observation(self, state: AgentState) -> None:
         """Replace the last user message in conversation with a fresh observation.
 
@@ -750,14 +704,6 @@ class Agent:
         if self.message_manager.conversation and self.message_manager.conversation[-1].get("role") == "user":
             self.message_manager.conversation.pop()
         self.message_manager.add_observation(state, state.get("last_screenshot_b64", ""))
-
-    def _build_current_page_state(self, state: AgentState) -> PageState:
-        return PageState(
-            url=state.get("current_url", ""),
-            title=state.get("page_title", ""),
-            content=state.get("page_content", ""),
-            elements=[],
-        )
 
     def _find_interactive_element(
         self, state: AgentState, element_id: Any

@@ -56,11 +56,10 @@ MessageManager accumulates messages via `add_observation()`, `add_assistant_tool
 4. `src/agent/page_summarizer.py` — sidecar page compression (not integrated into core)
 5. `src/agent/loop_detector.py` — local anti-loop hints (AAA, ABAB, page oscillation)
 6. `src/agent/state.py` — AgentState TypedDict, state mutation helpers, fingerprinting
-7. `src/agent/prompts.py` — system prompts (main agent, page summarizer, DOM inspector)
-8. `src/agent/inspection.py` — DomInspector (separate LLM call for DOM questions)
-9. `src/browser/manager.py` — browser execution layer (Playwright)
-10. `src/parser/page_parser.py` — DOM/text extraction
-11. `src/security/security_layer.py` — risky-action confirmation и prompt-injection warnings
+7. `src/agent/prompts.py` — system prompts for the main runtime
+8. `src/browser/manager.py` — browser execution layer (Playwright)
+9. `src/parser/page_parser.py` — DOM/text extraction
+10. `src/security/security_layer.py` — risky-action confirmation и prompt-injection warnings
 
 ## Commands
 

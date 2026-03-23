@@ -19,7 +19,6 @@ ALWAYS_SAFE_ACTIONS = frozenset(
         "switch_tab",
         "press_key",
         "save_memory",
-        "inspect_dom",
         "step_meta",
         "set_subtask",
         "done",

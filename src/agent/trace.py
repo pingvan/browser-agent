@@ -85,7 +85,7 @@ def describe_tool_target(
             return f"[{ref}] not found in cached page state"
         case "click_coordinates":
             return (
-                f'({args.get("x")}, {args.get("y")}) targeting '
+                f"({args.get('x')}, {args.get('y')}) targeting "
                 f'"{_truncate(str(args.get("description", "")), 100)}"'
             )
         case "navigate":

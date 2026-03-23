@@ -128,7 +128,7 @@ class SecurityLayer:
                 return f"Click on element [{args.get('ref', args.get('element_id'))}]"
             case "click_coordinates":
                 return (
-                    f'Click coordinates ({args.get("x")}, {args.get("y")}) '
+                    f"Click coordinates ({args.get('x')}, {args.get('y')}) "
                     f'targeting "{str(args.get("description", ""))[:80]}"'
                 )
             case "hover":

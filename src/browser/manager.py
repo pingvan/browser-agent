@@ -316,9 +316,7 @@ class BrowserManager:
         )
 
     async def click_coordinates(self, x: int, y: int, description: str) -> dict[str, Any]:
-        logger.info(
-            f'Browser.click_coordinates: x={x}, y={y}, description="{description[:120]}"'
-        )
+        logger.info(f'Browser.click_coordinates: x={x}, y={y}, description="{description[:120]}"')
         url_before = self.page.url
         viewport = await self._capture_viewport()
         if viewport is not None:

@@ -434,10 +434,7 @@ class MessageManager:
             return explicit, reason
 
         label = str(
-            element.get("aria_label")
-            or element.get("text")
-            or element.get("placeholder")
-            or ""
+            element.get("aria_label") or element.get("text") or element.get("placeholder") or ""
         ).strip()
         normalized = " ".join(label.lower().split())
         role = str(element.get("role") or element.get("tag") or "").lower()

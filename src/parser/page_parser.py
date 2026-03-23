@@ -15,6 +15,19 @@ class BBox:
 
 
 @dataclass
+class Viewport:
+    width: int
+    height: int
+
+
+@dataclass
+class ActiveModal:
+    kind: str
+    label: str
+    bbox: BBox | None = None
+
+
+@dataclass
 class InteractiveElement:
     ref: int
     tag: str
@@ -28,6 +41,8 @@ class InteractiveElement:
     value: str
     disabled: bool
     bbox: BBox | None = None
+    center_x: int | None = None
+    center_y: int | None = None
 
 
 @dataclass
@@ -36,6 +51,8 @@ class PageState:
     title: str
     content: str
     elements: list[InteractiveElement]
+    viewport: Viewport | None = None
+    active_modal: ActiveModal | None = None
 
 
 @dataclass
@@ -46,6 +63,10 @@ class PageStateWithScreenshot:
 
 _JS_EXTRACT_ELEMENTS = """
 () => {
+    for (const stale of document.querySelectorAll('[data-agent-ref]')) {
+        delete stale.dataset.agentRef;
+    }
+
     const selectors = [
         '[role="option"]', '[role="listbox"]',
         'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
@@ -57,6 +78,90 @@ _JS_EXTRACT_ELEMENTS = """
     const seen = new Set();
     const results = [];
     let ref = 0;
+    const viewport = {
+        width: Math.round(window.innerWidth || 0),
+        height: Math.round(window.innerHeight || 0),
+    };
+
+    const isVisible = (el) => {
+        if (!(el instanceof Element)) return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 5 || rect.height < 5) return false;
+        const style = getComputedStyle(el);
+        if (style.visibility === 'hidden' || style.display === 'none') return false;
+        return rect.bottom >= 0
+            && rect.right >= 0
+            && rect.top <= window.innerHeight
+            && rect.left <= window.innerWidth;
+    };
+
+    const getLabel = (el) => {
+        const ariaLabel = (el.getAttribute('aria-label') || '').trim();
+        if (ariaLabel) return ariaLabel.slice(0, 120);
+
+        const labelledBy = (el.getAttribute('aria-labelledby') || '').trim();
+        if (labelledBy) {
+            const text = labelledBy
+                .split(/\\s+/)
+                .map((id) => document.getElementById(id)?.textContent || '')
+                .join(' ')
+                .trim();
+            if (text) return text.slice(0, 120);
+        }
+
+        const heading = el.querySelector('h1, h2, h3, h4, [role="heading"]');
+        const headingText = (heading?.textContent || '').trim();
+        if (headingText) return headingText.slice(0, 120);
+
+        return (el.textContent || '').trim().slice(0, 120);
+    };
+
+    const activeSurfaceSelectors = [
+        '[role="dialog"]',
+        '[role="alertdialog"]',
+        '[role="listbox"]',
+        '[role="menu"]',
+        '[aria-modal="true"]',
+    ];
+    let active_modal = null;
+
+    for (const selector of activeSurfaceSelectors) {
+        let elements;
+        try {
+            elements = document.querySelectorAll(selector);
+        } catch (e) {
+            continue;
+        }
+        for (const el of elements) {
+            if (!isVisible(el)) continue;
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            const zIndex = Number.parseInt(style.zIndex || '0', 10) || 0;
+            const area = Math.round(rect.width * rect.height);
+            const candidate = {
+                kind: (
+                    el.getAttribute('role')
+                    || (el.getAttribute('aria-modal') === 'true' ? 'dialog' : 'surface')
+                ).slice(0, 40),
+                label: getLabel(el),
+                bbox: {
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                },
+                z_index: zIndex,
+                area,
+            };
+            if (
+                !active_modal
+                || candidate.z_index > active_modal.z_index
+                || (candidate.z_index === active_modal.z_index && candidate.area > active_modal.area)
+            ) {
+                active_modal = candidate;
+            }
+        }
+    }
 
     for (const selector of selectors) {
         let elements;
@@ -69,12 +174,8 @@ _JS_EXTRACT_ELEMENTS = """
             if (seen.has(el)) continue;
             seen.add(el);
 
+            if (!isVisible(el)) continue;
             const rect = el.getBoundingClientRect();
-            if (rect.width < 5 || rect.height < 5) continue;
-            const style = getComputedStyle(el);
-            if (style.visibility === 'hidden' || style.display === 'none') continue;
-            if (rect.top > window.innerHeight || rect.bottom < 0) continue;
-            if (rect.left > window.innerWidth || rect.right < 0) continue;
 
             el.dataset.agentRef = String(ref);
 
@@ -102,13 +203,25 @@ _JS_EXTRACT_ELEMENTS = """
                     width: Math.round(rect.width),
                     height: Math.round(rect.height),
                 },
+                center_x: Math.round(rect.x + rect.width / 2),
+                center_y: Math.round(rect.y + rect.height / 2),
             });
             ref++;
             if (results.length >= 150) break;
         }
         if (results.length >= 150) break;
     }
-    return results;
+
+    if (active_modal) {
+        delete active_modal.z_index;
+        delete active_modal.area;
+    }
+
+    return {
+        elements: results,
+        viewport,
+        active_modal,
+    };
 }
 """
 
@@ -175,18 +288,30 @@ def format_page_state(
     title: str,
     elements: list[InteractiveElement],
     text_content: str,
+    *,
+    viewport: Viewport | None = None,
+    active_modal: ActiveModal | None = None,
     max_elements: int = 150,
 ) -> str:
     parts = [
         "## Current Page",
         f"URL: {url}",
         f"Title: {title}",
-        "",
-        "## Page Content (summary)",
-        text_content or "(no visible text)",
-        "",
-        "## Interactive Elements",
     ]
+    if viewport is not None:
+        parts.append(f"Viewport: {viewport.width}x{viewport.height}px")
+    if active_modal is not None:
+        label_suffix = f' "{active_modal.label}"' if active_modal.label else ""
+        parts.append(f"Active modal: {active_modal.kind}{label_suffix}")
+    parts.extend(
+        [
+            "",
+            "## Page Content (summary)",
+            text_content or "(no visible text)",
+            "",
+            "## Interactive Elements",
+        ]
+    )
     for el in elements[:max_elements]:
         parts.append(_format_element(el))
     return "\n".join(parts)
@@ -200,9 +325,18 @@ async def extract_page_state(page: Page) -> PageState:
         title = ""
 
     try:
-        raw_elements: list[dict] = await page.evaluate(_JS_EXTRACT_ELEMENTS)
+        raw_payload = await page.evaluate(_JS_EXTRACT_ELEMENTS)
     except PlaywrightError:
-        raw_elements = []
+        raw_payload = {"elements": [], "viewport": None, "active_modal": None}
+
+    if isinstance(raw_payload, dict):
+        raw_elements: list[dict] = list(raw_payload.get("elements", []))
+        raw_viewport = raw_payload.get("viewport")
+        raw_active_modal = raw_payload.get("active_modal")
+    else:
+        raw_elements = list(raw_payload) if isinstance(raw_payload, list) else []
+        raw_viewport = None
+        raw_active_modal = None
 
     elements = [
         InteractiveElement(
@@ -227,17 +361,62 @@ async def extract_page_state(page: Page) -> PageState:
                 if e.get("bbox")
                 else None
             ),
+            center_x=e.get("center_x"),
+            center_y=e.get("center_y"),
         )
         for e in raw_elements
     ]
+
+    viewport = (
+        Viewport(
+            width=int(raw_viewport["width"]),
+            height=int(raw_viewport["height"]),
+        )
+        if isinstance(raw_viewport, dict)
+        and raw_viewport.get("width") is not None
+        and raw_viewport.get("height") is not None
+        else None
+    )
+
+    active_modal = None
+    if isinstance(raw_active_modal, dict):
+        modal_bbox = raw_active_modal.get("bbox")
+        active_modal = ActiveModal(
+            kind=str(raw_active_modal.get("kind", "")).strip() or "surface",
+            label=str(raw_active_modal.get("label", "")).strip(),
+            bbox=(
+                BBox(
+                    x=modal_bbox["x"],
+                    y=modal_bbox["y"],
+                    width=modal_bbox["width"],
+                    height=modal_bbox["height"],
+                )
+                if isinstance(modal_bbox, dict)
+                else None
+            ),
+        )
 
     try:
         text_content: str = await page.evaluate(_JS_EXTRACT_TEXT)
     except PlaywrightError:
         text_content = ""
 
-    content = format_page_state(url, title, elements, text_content)
-    return PageState(url=url, title=title, content=content, elements=elements)
+    content = format_page_state(
+        url,
+        title,
+        elements,
+        text_content,
+        viewport=viewport,
+        active_modal=active_modal,
+    )
+    return PageState(
+        url=url,
+        title=title,
+        content=content,
+        elements=elements,
+        viewport=viewport,
+        active_modal=active_modal,
+    )
 
 
 async def take_screenshot(page: Page, quality: int = 65) -> str:

@@ -6,6 +6,7 @@ from typing import Any
 from src.agent.schema import AgentOutput
 from src.agent.state import (
     AgentState,
+    ElementSnapshot,
     render_memory,
 )
 from src.config.settings import (
@@ -18,6 +19,34 @@ _DEFAULT_TOKEN_LIMIT = 90_000
 
 # Number of recent cycles to keep intact during compression.
 _DEFAULT_KEEP_RECENT = 6
+
+_LOW_CONFIDENCE_ROLES = frozenset({"combobox", "listbox", "menu", "menuitem"})
+_GENERIC_ACTION_LABELS = frozenset(
+    {
+        "",
+        "ok",
+        "open",
+        "close",
+        "more",
+        "menu",
+        "find",
+        "search",
+        "order",
+        "buy",
+        "details",
+        "next",
+        "back",
+        "далее",
+        "назад",
+        "меню",
+        "ок",
+        "найти",
+        "искать",
+        "заказать",
+        "купить",
+        "подробнее",
+    }
+)
 
 
 class MessageManager:
@@ -202,6 +231,9 @@ class MessageManager:
                 f"Title: {state.get('page_title', '')}",
             ]
         )
+        viewport = state.get("viewport")
+        if isinstance(viewport, dict) and viewport.get("width") and viewport.get("height"):
+            sections.append(f"Viewport: {viewport['width']}x{viewport['height']}px")
 
         subtask = state.get("current_subtask", "")
         if subtask:
@@ -211,6 +243,22 @@ class MessageManager:
         excerpt = state.get("page_text_excerpt", "")
         if excerpt:
             sections.extend(["", "## Visible Page Text", excerpt])
+
+        active_modal = state.get("active_modal")
+        if isinstance(active_modal, dict) and active_modal.get("kind"):
+            label = str(active_modal.get("label", "")).strip()
+            modal_line = f"Active modal: {str(active_modal.get('kind', 'surface'))}"
+            if label:
+                modal_line += f' "{label}"'
+            sections.extend(
+                [
+                    "",
+                    "## Active Modal/Dialog Detected",
+                    modal_line,
+                    "Treat background elements as potentially unreliable while this surface is open.",
+                    "If the screenshot shows the control you need, you may use click_coordinates(x, y, description).",
+                ]
+            )
 
         # Interactive elements
         sections.extend(["", "## Interactive Elements", self._render_elements(state)])
@@ -222,6 +270,18 @@ class MessageManager:
         stuck_hint = state.get("stuck_hint", "")
         if stuck_hint:
             sections.extend(["", "## ⚠ Loop Warning", stuck_hint])
+
+        if state.get("element_ids_unreliable"):
+            sections.extend(
+                [
+                    "",
+                    "## Element IDs May Be Unreliable",
+                    "A prior click(element_id) on this unchanged page had no observable effect.",
+                    "The interactive elements list may be unreliable here.",
+                    "Use click_coordinates(x, y, description) for the next attempt.",
+                    "If you must target a visible control, use click_coordinates(x, y, description) instead of another click(element_id).",
+                ]
+            )
 
         if state.get("overlay_click_blocked"):
             sections.extend(
@@ -367,8 +427,36 @@ class MessageManager:
     # Internal: rendering helpers
     # ------------------------------------------------------------------
 
+    def _element_confidence(self, element: ElementSnapshot) -> tuple[str, str]:
+        explicit = str(element.get("confidence", "")).strip().lower()
+        if explicit in {"high", "medium", "low"}:
+            reason = str(element.get("confidence_reason", "")).strip() or "provided"
+            return explicit, reason
+
+        label = str(
+            element.get("aria_label")
+            or element.get("text")
+            or element.get("placeholder")
+            or ""
+        ).strip()
+        normalized = " ".join(label.lower().split())
+        role = str(element.get("role") or element.get("tag") or "").lower()
+
+        if role in _LOW_CONFIDENCE_ROLES or normalized in _GENERIC_ACTION_LABELS:
+            return "low", "generic action"
+        if (
+            len(label) >= 18
+            or any(char.isdigit() for char in label)
+            or "," in label
+            or "₽" in label
+            or len(normalized.split()) >= 3
+        ):
+            return "high", "specific label"
+        return "medium", "usable label"
+
     def _render_elements(self, state: AgentState) -> str:
         lines: list[str] = []
+        show_centers = bool(state.get("active_modal") or state.get("element_ids_unreliable"))
         for element in state.get("interactive_elements", [])[:MAX_PROMPT_ELEMENTS]:
             label = (
                 element.get("aria_label")
@@ -378,12 +466,22 @@ class MessageManager:
             )
             role = element.get("role") or element.get("tag") or "element"
             extra: list[str] = []
+            confidence, reason = self._element_confidence(element)
+            extra.append(f"confidence={confidence} ({reason})")
             if element.get("href"):
                 extra.append(f'href="{element.get("href", "")}"')
             if element.get("value"):
                 extra.append(f'value="{element.get("value", "")}"')
             if element.get("disabled"):
                 extra.append("disabled")
+            if (
+                show_centers
+                and isinstance(element.get("center_x"), int)
+                and isinstance(element.get("center_y"), int)
+            ):
+                center_x = int(element.get("center_x", 0))
+                center_y = int(element.get("center_y", 0))
+                extra.append(f"center=({center_x}, {center_y})")
             suffix = f" | {' | '.join(extra)}" if extra else ""
             lines.append(
                 f'[{element.get("index", element.get("ref", "?"))}] {role} | "{label}"{suffix}'

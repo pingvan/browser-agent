@@ -95,7 +95,9 @@ class SecurityLayer:
             return False
 
         match tool_name:
-            case "click" | "hover" | "select_option":
+            case "click" | "click_coordinates" | "hover" | "select_option":
+                if tool_name == "click_coordinates":
+                    return self._check_text_dangerous(str(args.get("description", "")))
                 ref: int = int(args.get("ref", args.get("element_id", -1)))
                 el = self._find_element(ref, page_state)
                 if el is None:
@@ -124,6 +126,11 @@ class SecurityLayer:
         match tool_name:
             case "click":
                 return f"Click on element [{args.get('ref', args.get('element_id'))}]"
+            case "click_coordinates":
+                return (
+                    f'Click coordinates ({args.get("x")}, {args.get("y")}) '
+                    f'targeting "{str(args.get("description", ""))[:80]}"'
+                )
             case "hover":
                 return f"Hover over element [{args.get('ref', args.get('element_id'))}]"
             case "select_option":

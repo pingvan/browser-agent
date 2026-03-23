@@ -26,7 +26,7 @@ ALWAYS_SAFE_ACTIONS = frozenset(
     }
 )
 
-NEEDS_CLASSIFICATION = frozenset({"click", "type_text"})
+NEEDS_CLASSIFICATION = frozenset({"click", "click_coordinates", "type_text"})
 
 
 def needs_security_check(action_name: str, arguments: dict[str, Any]) -> bool:

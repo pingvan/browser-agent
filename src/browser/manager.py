@@ -315,6 +315,53 @@ class BrowserManager:
             target_href=target_href,
         )
 
+    async def click_coordinates(self, x: int, y: int, description: str) -> dict[str, Any]:
+        logger.info(
+            f'Browser.click_coordinates: x={x}, y={y}, description="{description[:120]}"'
+        )
+        url_before = self.page.url
+        viewport = await self._capture_viewport()
+        if viewport is not None:
+            width = int(viewport.get("width", 0))
+            height = int(viewport.get("height", 0))
+            if x < 0 or y < 0 or x >= width or y >= height:
+                return self._build_action_failure(
+                    description=(
+                        f'Coordinates ({x}, {y}) targeting "{description}" are outside the viewport '
+                        f"({width}x{height})."
+                    ),
+                    error="coordinates outside the viewport",
+                    url_before=url_before,
+                    url_after=self.page.url,
+                )
+
+        dom_size_before = await self._capture_dom_size(self.page)
+        pages_before = len(self.context.pages)
+        await self.page.mouse.click(x, y)
+        await self.page.wait_for_timeout(150)
+        opened_new_tab = await self._adopt_new_tab_if_needed(previous_page_count=pages_before)
+        url_after = self.page.url
+        dom_size_after = await self._capture_dom_size(self.page)
+        normalized_before = normalize_url_for_fingerprint(url_before)
+        normalized_after = normalize_url_for_fingerprint(url_after)
+        dom_changed = dom_size_before != dom_size_after
+        page_changed = opened_new_tab or normalized_before != normalized_after or dom_changed
+
+        if opened_new_tab or normalized_before != normalized_after:
+            await self._wait_for_stable(wait_for_dom_stability=True)
+            url_after = self.page.url
+            page_changed = True
+        elif dom_changed:
+            await self._wait_for_stable(wait_for_dom_stability=True, render_buffer_ms=120)
+
+        return self._build_action_result(
+            description=f'Clicked coordinates ({x}, {y}) targeting "{description}"',
+            url_before=url_before,
+            url_after=url_after,
+            page_changed=page_changed,
+            opened_new_tab=opened_new_tab,
+        )
+
     async def type_text(
         self,
         element_id: int,
@@ -510,6 +557,10 @@ class BrowserManager:
         element = self._find_element(element_id, elements)
         if element is None:
             raise ValueError(f"Element [{element_id}] not found in current observation")
+        center_x = element.get("center_x")
+        center_y = element.get("center_y")
+        if isinstance(center_x, int) and isinstance(center_y, int):
+            return center_x, center_y
         bbox = element.get("bbox")
         if bbox:
             return (
@@ -536,6 +587,17 @@ class BrowserManager:
             )
         except Exception:
             return -1
+
+    async def _capture_viewport(self) -> dict[str, int] | None:
+        try:
+            viewport = await self.page.evaluate(
+                "() => ({ width: window.innerWidth || 0, height: window.innerHeight || 0 })"
+            )
+        except Exception:
+            return None
+        if not isinstance(viewport, dict):
+            return None
+        return viewport
 
     async def _adopt_new_tab_if_needed(self, *, previous_page_count: int) -> bool:
         if len(self.context.pages) <= previous_page_count:

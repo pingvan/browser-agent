@@ -50,6 +50,27 @@ class ToolRegistry:
                     },
                 ),
                 ToolSpec(
+                    name="click_coordinates",
+                    description=(
+                        "Click viewport-relative coordinates when the screenshot is reliable "
+                        "but element IDs are ambiguous or stale."
+                    ),
+                    category="browser",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "integer"},
+                            "y": {"type": "integer"},
+                            "description": {
+                                "type": "string",
+                                "description": "Short human-readable target description.",
+                            },
+                        },
+                        "required": ["x", "y", "description"],
+                        "additionalProperties": False,
+                    },
+                ),
+                ToolSpec(
                     name="type_text",
                     description="Type text into an input-like element. Optionally press Enter after typing.",
                     category="browser",
@@ -199,11 +220,18 @@ class ToolRegistry:
         if missing:
             return f"Missing required arguments for {name}: {', '.join(sorted(missing))}"
 
-        if name in {"click", "switch_tab"} and not isinstance(
-            arguments.get("element_id" if name == "click" else "index"), int
-        ):
+        if name in {"click", "switch_tab"}:
             target = "element_id" if name == "click" else "index"
-            return f"{name}.{target} must be an integer"
+            if not isinstance(arguments.get(target), int):
+                return f"{name}.{target} must be an integer"
+
+        if name == "click_coordinates":
+            if not isinstance(arguments.get("x"), int):
+                return "click_coordinates.x must be an integer"
+            if not isinstance(arguments.get("y"), int):
+                return "click_coordinates.y must be an integer"
+            if not isinstance(arguments.get("description"), str):
+                return "click_coordinates.description must be a string"
 
         if name == "type_text":
             if not isinstance(arguments.get("element_id"), int):

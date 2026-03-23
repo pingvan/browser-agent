@@ -16,8 +16,11 @@ from src.agent.message_manager import MessageManager
 from src.agent.prompts import MAIN_AGENT_SYSTEM_PROMPT
 from src.agent.schema import AgentOutput
 from src.agent.state import (
+    ActiveModalSnapshot,
     AgentState,
+    BBox,
     ElementSnapshot,
+    ViewportSnapshot,
     append_recent_item,
     append_step_history,
     build_page_fingerprint,
@@ -151,6 +154,7 @@ class Agent:
                     f"You clearly have all the information this page can give you. "
                     f"Use save_memory NOW to capture anything useful, then move on.",
                 )
+                self._inject_runtime_hint_into_last_user_message(state.get("stuck_hint", ""))
 
             # Build messages from accumulated conversation.
             messages = self.message_manager.build_messages(
@@ -247,11 +251,18 @@ class Agent:
                 break
 
             # Post-action observation → next user message with results embedded.
+            pre_action_fingerprint = state.get("page_fingerprint", "")
+            await self._wait_for_post_action_observe(results)
             await self._observe(
                 state,
                 force_visual=bool(
                     state.get("retry_count", 0) > 0 or state.get("consecutive_stuck_steps", 0) > 0
                 ),
+            )
+            self._reconcile_post_action_results(
+                state,
+                results,
+                previous_fingerprint=pre_action_fingerprint,
             )
             self.message_manager.add_action_results(
                 results, state, state.get("last_screenshot_b64", "")
@@ -327,16 +338,87 @@ class Agent:
         state["page_fingerprint"] = fingerprint
         state["last_screenshot_b64"] = observation.screenshot_b64
         state["interactive_elements"] = observation.elements
+        page_state = observation.page_state
+        viewport = getattr(page_state, "viewport", None)
+        active_modal = getattr(page_state, "active_modal", None)
+        viewport_snapshot: ViewportSnapshot | None
+        if isinstance(viewport, dict):
+            viewport_snapshot = {
+                "width": int(viewport.get("width", 0)),
+                "height": int(viewport.get("height", 0)),
+            }
+        elif viewport is not None:
+            viewport_snapshot = {
+                "width": int(viewport.width),
+                "height": int(viewport.height),
+            }
+        else:
+            viewport_snapshot = None
+        state["viewport"] = viewport_snapshot
+
+        modal_snapshot: ActiveModalSnapshot | None
+        if isinstance(active_modal, dict):
+            modal_payload: ActiveModalSnapshot = {
+                "kind": str(active_modal.get("kind", "")).strip() or "surface",
+                "label": str(active_modal.get("label", "")).strip(),
+            }
+            modal_bbox = active_modal.get("bbox")
+            if isinstance(modal_bbox, dict):
+                modal_payload["bbox"] = cast(
+                    BBox,
+                    {
+                        "x": int(modal_bbox.get("x", 0)),
+                        "y": int(modal_bbox.get("y", 0)),
+                        "width": int(modal_bbox.get("width", 0)),
+                        "height": int(modal_bbox.get("height", 0)),
+                    },
+                )
+            modal_snapshot = modal_payload
+        elif active_modal is not None:
+            modal_snapshot = cast(
+                ActiveModalSnapshot,
+                {
+                    "kind": active_modal.kind,
+                    "label": active_modal.label,
+                    **(
+                        {
+                            "bbox": cast(
+                                BBox,
+                                {
+                                    "x": active_modal.bbox.x,
+                                    "y": active_modal.bbox.y,
+                                    "width": active_modal.bbox.width,
+                                    "height": active_modal.bbox.height,
+                                },
+                            )
+                        }
+                        if active_modal.bbox is not None
+                        else {}
+                    ),
+                },
+            )
+        else:
+            modal_snapshot = None
+        state["active_modal"] = modal_snapshot
         state["last_observation"] = {
             "url": observation.page_state.url,
             "title": observation.page_state.title,
             "content": observation.page_state.content,
             "tab_count": observation.tab_count,
+            "viewport": state.get("viewport"),
+            "active_modal": state.get("active_modal"),
         }
         state["recent_page_fingerprints"] = append_recent_item(
             state.get("recent_page_fingerprints", []),
             fingerprint,
         )
+        if (
+            state.get("element_ids_unreliable")
+            and state.get("element_ids_unreliable_fingerprint")
+            and state.get("element_ids_unreliable_fingerprint") != fingerprint
+        ):
+            state["element_ids_unreliable"] = False
+            state["element_ids_unreliable_fingerprint"] = ""
         state["prompt_injection_warnings"] = self.security_layer.check_prompt_injection(
             observation.page_state
         )
@@ -522,8 +604,9 @@ class Agent:
                     self._record_failure(state, action=name, result=err)
                     results.append({"tool": name, "success": False, "description": err})
                     break
-                if self._should_block_browser_action(state, action_signature):
-                    err = "Blocked: repeated action on unchanged page."
+                block_reason = self._should_block_browser_action(state, name, action_signature)
+                if block_reason:
+                    err = block_reason
                     results.append({"tool": name, "success": False, "description": err})
                     break
                 result = await self._execute_browser_action(name, arguments, state)
@@ -734,6 +817,27 @@ class Agent:
             self.message_manager.conversation.pop()
         self.message_manager.add_observation(state, state.get("last_screenshot_b64", ""))
 
+    def _inject_runtime_hint_into_last_user_message(self, hint: str) -> None:
+        if not hint or not self.message_manager.conversation:
+            return
+        last_message = self.message_manager.conversation[-1]
+        if last_message.get("role") != "user":
+            return
+
+        note = f"\n\n## ⚠ Loop Warning\n{hint}"
+        content = last_message.get("content", "")
+        if isinstance(content, str):
+            if hint not in content:
+                last_message["content"] = content + note
+            return
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = str(item.get("text", ""))
+                    if hint not in text:
+                        item["text"] = text + note
+                    return
+
     def _find_interactive_element(
         self, state: AgentState, element_id: Any
     ) -> ElementSnapshot | None:
@@ -785,6 +889,12 @@ class Agent:
                     int(arguments["element_id"]),
                     state.get("interactive_elements", []),
                 )
+            if name == "click_coordinates":
+                return await self.browser.click_coordinates(
+                    int(arguments["x"]),
+                    int(arguments["y"]),
+                    str(arguments["description"]),
+                )
             if name == "type_text":
                 return await self.browser.type_text(
                     int(arguments["element_id"]),
@@ -823,7 +933,147 @@ class Agent:
             "url_after": state.get("current_url", ""),
         }
 
-    def _should_block_browser_action(self, state: AgentState, action_signature: str) -> bool:
+    async def _wait_for_post_action_observe(self, results: list[dict[str, Any]]) -> None:
+        browser_result = next(
+            (
+                result
+                for result in results
+                if self.tool_registry.is_browser_action(str(result.get("tool", "")))
+            ),
+            None,
+        )
+        if browser_result is None:
+            return
+        if (
+            browser_result.get("success")
+            and browser_result.get("tool") in {"click", "click_coordinates"}
+            and browser_result.get("page_changed") is False
+        ):
+            try:
+                await self.browser.wait(0.3)
+            except Exception:
+                pass
+
+    def _reconcile_post_action_results(
+        self,
+        state: AgentState,
+        results: list[dict[str, Any]],
+        *,
+        previous_fingerprint: str,
+    ) -> None:
+        browser_result = next(
+            (
+                result
+                for result in results
+                if self.tool_registry.is_browser_action(str(result.get("tool", "")))
+            ),
+            None,
+        )
+        if browser_result is None or not browser_result.get("success"):
+            return
+
+        tool_name = str(browser_result.get("tool", ""))
+        current_fingerprint = state.get("page_fingerprint", "")
+        ui_changed = bool(current_fingerprint and current_fingerprint != previous_fingerprint)
+
+        if browser_result.get("page_changed"):
+            if current_fingerprint != state.get("element_ids_unreliable_fingerprint", ""):
+                state["element_ids_unreliable"] = False
+                state["element_ids_unreliable_fingerprint"] = ""
+            return
+
+        if ui_changed:
+            description = str(browser_result.get("description", "")).strip()
+            if "visible UI changed after the action" not in description:
+                description = (
+                    f"{description}. visible UI changed after the action"
+                    if description
+                    else "visible UI changed after the action"
+                )
+            browser_result["description"] = description
+            browser_result["page_changed"] = True
+            last_action_result = state.get("last_action_result")
+            if last_action_result is not None:
+                last_action_result["description"] = description
+                last_action_result["page_changed"] = True
+            state["consecutive_stuck_steps"] = 0
+            state["element_ids_unreliable"] = False
+            state["element_ids_unreliable_fingerprint"] = ""
+            return
+
+        if tool_name == "click":
+            message = (
+                f"{browser_result.get('description', 'Click action')} had no observable effect on this unchanged page. "
+                "Do NOT keep testing adjacent buttons one by one. "
+                "The interactive elements list may be unreliable here; use click_coordinates(x, y, description)."
+            )
+            browser_result["success"] = False
+            browser_result["description"] = message
+            browser_result["page_changed"] = False
+            last_action_result = state.get("last_action_result")
+            if last_action_result is not None:
+                last_action_result["success"] = False
+                last_action_result["description"] = message
+                last_action_result["page_changed"] = False
+                last_action_result["error"] = message
+            state["last_error"] = message
+            state["retry_count"] = state.get("retry_count", 0) + 1
+            state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
+            state["element_ids_unreliable"] = True
+            state["element_ids_unreliable_fingerprint"] = current_fingerprint
+            self._set_stuck_hint(
+                state,
+                "This click had no observable effect on the unchanged page. "
+                "Do NOT keep testing adjacent buttons one by one. "
+                "The interactive elements list may be unreliable here. "
+                "Use click_coordinates(x, y, description) guided by the screenshot.",
+            )
+            return
+
+        if tool_name == "click_coordinates":
+            message = (
+                f"{browser_result.get('description', 'Coordinate click')} had no observable effect. "
+                "Choose a different visible target or change strategy."
+            )
+            browser_result["success"] = False
+            browser_result["description"] = message
+            browser_result["page_changed"] = False
+            last_action_result = state.get("last_action_result")
+            if last_action_result is not None:
+                last_action_result["success"] = False
+                last_action_result["description"] = message
+                last_action_result["page_changed"] = False
+                last_action_result["error"] = message
+            state["last_error"] = message
+            state["retry_count"] = state.get("retry_count", 0) + 1
+            state["consecutive_failures"] = state.get("consecutive_failures", 0) + 1
+
+    def _should_block_browser_action(
+        self, state: AgentState, name: str, action_signature: str
+    ) -> str | None:
+        if (
+            name == "click"
+            and state.get("element_ids_unreliable")
+            and state.get("element_ids_unreliable_fingerprint") == state.get("page_fingerprint")
+        ):
+            message = (
+                "Blocked: the interactive elements list may be unreliable on this unchanged page. "
+                "Use click_coordinates(x, y, description) instead of another click(element_id)."
+            )
+            self._set_stuck_hint(
+                state,
+                "The interactive elements list may be unreliable on this unchanged page. "
+                "Use click_coordinates(x, y, description) instead of another click(element_id).",
+            )
+            state["last_error"] = message
+            state["step_history"] = append_step_history(
+                state.get("step_history", []),
+                step=state.get("step_count", 0),
+                action=action_signature,
+                result=message,
+                success=False,
+            )
+            return message
         if (
             state.get("last_action_signature")
             and state.get("last_action_signature") == action_signature
@@ -842,8 +1092,8 @@ class Agent:
                 result="Blocked repeated browser action on unchanged page fingerprint",
                 success=False,
             )
-            return True
-        return False
+            return "Blocked: repeated action on unchanged page."
+        return None
 
     def _apply_action_loop_hint(self, state: AgentState) -> None:
         action_hint = self.loop_detector.detect_action_loop(state.get("recent_browser_actions", []))
@@ -883,7 +1133,10 @@ class Agent:
 
     def _set_stuck_hint(self, state: AgentState, hint: str) -> None:
         state["stuck_hint"] = hint
-        state["consecutive_stuck_steps"] = state.get("consecutive_stuck_steps", 0) + 1
+        current_step = state.get("step_count", 0)
+        if state.get("last_stuck_hint_step", 0) != current_step:
+            state["consecutive_stuck_steps"] = state.get("consecutive_stuck_steps", 0) + 1
+            state["last_stuck_hint_step"] = current_step
         logger.warning(f"LOOP_HINT step={state.get('step_count', 0)}: {hint}")
         self.step_logger.loop_warning_count += 1
 

@@ -83,6 +83,11 @@ def describe_tool_target(
             if element is not None:
                 return _describe_element(element)
             return f"[{ref}] not found in cached page state"
+        case "click_coordinates":
+            return (
+                f'({args.get("x")}, {args.get("y")}) targeting '
+                f'"{_truncate(str(args.get("description", "")), 100)}"'
+            )
         case "navigate":
             return _truncate(str(args.get("url", "")), 160)
         case "switch_tab":

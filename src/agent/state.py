@@ -21,6 +21,17 @@ class BBox(TypedDict):
     height: int
 
 
+class ViewportSnapshot(TypedDict):
+    width: int
+    height: int
+
+
+class ActiveModalSnapshot(TypedDict, total=False):
+    kind: str
+    label: str
+    bbox: BBox
+
+
 class ElementSnapshot(TypedDict, total=False):
     index: int
     ref: int
@@ -35,6 +46,10 @@ class ElementSnapshot(TypedDict, total=False):
     value: str
     disabled: bool
     bbox: BBox
+    center_x: int
+    center_y: int
+    confidence: str
+    confidence_reason: str
 
 
 class MemoryEntry(TypedDict):
@@ -72,6 +87,8 @@ class AgentState(TypedDict, total=False):
     last_screenshot_b64: str
     recent_page_fingerprints: list[str]
     interactive_elements: list[ElementSnapshot]
+    viewport: ViewportSnapshot | None
+    active_modal: ActiveModalSnapshot | None
     last_observation: dict[str, Any]
 
     last_action_result: dict[str, Any] | None
@@ -84,6 +101,7 @@ class AgentState(TypedDict, total=False):
     invalid_tool_calls: int
     consecutive_failures: int
     consecutive_stuck_steps: int
+    last_stuck_hint_step: int
     last_error: str
     stuck_hint: str
     phase_switch_warning: str
@@ -91,6 +109,8 @@ class AgentState(TypedDict, total=False):
 
     overlay_click_blocked: bool
     overlay_blocked_element: int | None
+    element_ids_unreliable: bool
+    element_ids_unreliable_fingerprint: str
 
     parse_failure_count: int
     forced_instruction: str
@@ -119,6 +139,8 @@ def create_initial_state(task: str) -> AgentState:
         last_screenshot_b64="",
         recent_page_fingerprints=[],
         interactive_elements=[],
+        viewport=None,
+        active_modal=None,
         last_observation={},
         last_action_result=None,
         last_action_signature="",
@@ -129,12 +151,15 @@ def create_initial_state(task: str) -> AgentState:
         invalid_tool_calls=0,
         consecutive_failures=0,
         consecutive_stuck_steps=0,
+        last_stuck_hint_step=0,
         last_error="",
         stuck_hint="",
         phase_switch_warning="",
         prompt_injection_warnings=[],
         overlay_click_blocked=False,
         overlay_blocked_element=None,
+        element_ids_unreliable=False,
+        element_ids_unreliable_fingerprint="",
         parse_failure_count=0,
         forced_instruction="",
         last_evaluation="",

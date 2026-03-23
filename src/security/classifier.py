@@ -245,6 +245,10 @@ class SecurityClassifier:
             if disabled:
                 element_parts.append('disabled="true"')
             sections.append("ELEMENT: " + " ".join(element_parts))
+        elif action_name == "click_coordinates":
+            description = str(arguments.get("description", "")).strip()
+            if description:
+                sections.append(f'VISIBLE TARGET: "{description}"')
 
         sections.append("Classify this action.")
         return "\n".join(sections)

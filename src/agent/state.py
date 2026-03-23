@@ -50,6 +50,7 @@ class ElementSnapshot(TypedDict, total=False):
     center_y: int
     confidence: str
     confidence_reason: str
+    in_modal: bool
 
 
 class MemoryEntry(TypedDict):

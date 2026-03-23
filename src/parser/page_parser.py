@@ -43,6 +43,7 @@ class InteractiveElement:
     bbox: BBox | None = None
     center_x: int | None = None
     center_y: int | None = None
+    in_modal: bool = False
 
 
 @dataclass
@@ -163,6 +164,13 @@ _JS_EXTRACT_ELEMENTS = """
         }
     }
 
+    const modalRect = active_modal?.bbox || null;
+    const isInsideModal = (cx, cy) => {
+        if (!modalRect) return false;
+        return cx >= modalRect.x && cx <= modalRect.x + modalRect.width
+            && cy >= modalRect.y && cy <= modalRect.y + modalRect.height;
+    };
+
     for (const selector of selectors) {
         let elements;
         try {
@@ -205,6 +213,7 @@ _JS_EXTRACT_ELEMENTS = """
                 },
                 center_x: Math.round(rect.x + rect.width / 2),
                 center_y: Math.round(rect.y + rect.height / 2),
+                in_modal: isInsideModal(Math.round(rect.x + rect.width / 2), Math.round(rect.y + rect.height / 2)),
             });
             ref++;
             if (results.length >= 150) break;
@@ -363,6 +372,7 @@ async def extract_page_state(page: Page) -> PageState:
             ),
             center_x=e.get("center_x"),
             center_y=e.get("center_y"),
+            in_modal=bool(e.get("in_modal", False)),
         )
         for e in raw_elements
     ]

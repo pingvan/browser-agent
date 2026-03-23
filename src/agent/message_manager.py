@@ -255,8 +255,8 @@ class MessageManager:
                     "",
                     "## Active Modal/Dialog Detected",
                     modal_line,
-                    "Treat background elements as potentially unreliable while this surface is open.",
-                    "If the screenshot shows the control you need, you may use click_coordinates(x, y, description).",
+                    "Elements tagged [MODAL] are inside the modal. Elements tagged [BG] are background.",
+                    "Interact ONLY with [MODAL] elements. For unlisted modal controls, use click_coordinates guided by the screenshot.",
                 ]
             )
 
@@ -457,6 +457,7 @@ class MessageManager:
     def _render_elements(self, state: AgentState) -> str:
         lines: list[str] = []
         show_centers = bool(state.get("active_modal") or state.get("element_ids_unreliable"))
+        has_modal = bool(state.get("active_modal"))
         for element in state.get("interactive_elements", [])[:MAX_PROMPT_ELEMENTS]:
             label = (
                 element.get("aria_label")
@@ -483,7 +484,10 @@ class MessageManager:
                 center_y = int(element.get("center_y", 0))
                 extra.append(f"center=({center_x}, {center_y})")
             suffix = f" | {' | '.join(extra)}" if extra else ""
+            modal_tag = ""
+            if has_modal:
+                modal_tag = "[MODAL] " if element.get("in_modal") else "[BG] "
             lines.append(
-                f'[{element.get("index", element.get("ref", "?"))}] {role} | "{label}"{suffix}'
+                f'{modal_tag}[{element.get("index", element.get("ref", "?"))}] {role} | "{label}"{suffix}'
             )
         return "\n".join(lines) if lines else "(no interactive elements)"

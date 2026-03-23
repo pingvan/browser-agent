@@ -51,7 +51,6 @@ CLI / user task
 - за шаг разрешён максимум один browser action;
 - state actions вроде `save_memory` можно комбинировать с этим browser action;
 - старые части диалога могут сжиматься, поэтому всё важное для будущих шагов нужно сохранять через `save_memory`;
-- активного `PageSummarizer` в текущем execution path нет;
 - OpenAI native tool calling сейчас не используется как execution contract: модель возвращает JSON, а инструменты исполняются локально.
 
 ## Основные Модули

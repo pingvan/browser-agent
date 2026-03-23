@@ -252,10 +252,9 @@ class SecurityClassifier:
     def summary(self) -> str:
         total_tokens = self.prompt_tokens + self.completion_tokens
         pricing = MODEL_PRICING.get(self.model, {})
-        estimated_cost = (
-            self.prompt_tokens * pricing.get("prompt", 0.0)
-            + self.completion_tokens * pricing.get("completion", 0.0)
-        )
+        estimated_cost = self.prompt_tokens * pricing.get(
+            "prompt", 0.0
+        ) + self.completion_tokens * pricing.get("completion", 0.0)
         return (
             f"Security classifier: {self.call_count} calls, "
             f"{total_tokens} tokens total, "

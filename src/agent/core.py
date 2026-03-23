@@ -156,9 +156,7 @@ class Agent:
             messages = self.message_manager.build_messages(
                 system_prompt=MAIN_AGENT_SYSTEM_PROMPT,
             )
-            self.step_logger.log_conversation_history(
-                step=state["step_count"], messages=messages
-            )
+            self.step_logger.log_conversation_history(step=state["step_count"], messages=messages)
 
             t0 = time.perf_counter()
             output = await self._decide(messages, state)
@@ -383,7 +381,9 @@ class Agent:
                 cleaned_content = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "image_url":
-                        cleaned_content.append({"type": "image_url", "image_url": "[SCREENSHOT_REMOVED]"})
+                        cleaned_content.append(
+                            {"type": "image_url", "image_url": "[SCREENSHOT_REMOVED]"}
+                        )
                     else:
                         cleaned_content.append(item)
                 dumped["content"] = cleaned_content
@@ -406,17 +406,27 @@ class Agent:
                 role = msg.get("role", "?")
                 content = msg.get("content", "")
                 if isinstance(content, list):
-                    text_parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
+                    text_parts = [
+                        item.get("text", "")
+                        for item in content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ]
                     text = "\n".join(text_parts)
-                    has_image = any(item.get("type") == "image_url" for item in content if isinstance(item, dict))
-                    f.write(f"[{i}] {role} ({len(text)} chars{', +screenshot' if has_image else ''}):\n{text}\n")
+                    has_image = any(
+                        item.get("type") == "image_url"
+                        for item in content
+                        if isinstance(item, dict)
+                    )
+                    f.write(
+                        f"[{i}] {role} ({len(text)} chars{', +screenshot' if has_image else ''}):\n{text}\n"
+                    )
                 elif isinstance(content, str):
                     f.write(f"[{i}] {role} ({len(content)} chars):\n")
                     if role == "system" and len(content) > 500:
                         f.write(f"{content[:200]}\n...[TRUNCATED]...\n{content[-200:]}\n")
                     else:
                         f.write(f"{content}\n")
-                f.write(f"\n{'='*60}\n\n")
+                f.write(f"\n{'=' * 60}\n\n")
 
         logger.debug(f"DEBUG DUMP: step {step} messages saved to {dump_path}")
         # === END DEBUG DUMP ===
@@ -530,12 +540,14 @@ class Agent:
                     action_signature,
                 )
 
-                results.append({
-                    "tool": name,
-                    "success": bool(result.get("success", False)),
-                    "description": str(result.get("description", "")),
-                    **{k: v for k, v in result.items() if k not in ("success", "description")},
-                })
+                results.append(
+                    {
+                        "tool": name,
+                        "success": bool(result.get("success", False)),
+                        "description": str(result.get("description", "")),
+                        **{k: v for k, v in result.items() if k not in ("success", "description")},
+                    }
+                )
 
                 if result.get("success", False):
                     state["step_history"] = append_step_history(
@@ -561,17 +573,29 @@ class Agent:
                     self._record_failure(
                         state,
                         action=name,
-                        result=str(result.get("error", result.get("description", "Browser action failed"))),
+                        result=str(
+                            result.get("error", result.get("description", "Browser action failed"))
+                        ),
                         invalid_tool_call=False,
                     )
                     description = str(result.get("description", "")).lower()
                     error_text = str(result.get("error", "")).lower()
-                    if "overlay" in description or "intercept" in description or \
-                       "overlay" in error_text or "intercept" in error_text:
+                    if (
+                        "overlay" in description
+                        or "intercept" in description
+                        or "overlay" in error_text
+                        or "intercept" in error_text
+                    ):
                         state["overlay_click_blocked"] = True
                         element_id = arguments.get("element_id")
-                        state["overlay_blocked_element"] = int(element_id) if element_id is not None else None
-                    elif result.get("disabled") or "disabled" in description or "not enabled" in error_text:
+                        state["overlay_blocked_element"] = (
+                            int(element_id) if element_id is not None else None
+                        )
+                    elif (
+                        result.get("disabled")
+                        or "disabled" in description
+                        or "not enabled" in error_text
+                    ):
                         self._set_stuck_hint(
                             state,
                             "The control you tried to use is disabled or not ready yet. "
@@ -586,16 +610,18 @@ class Agent:
                 action_signature,
             )
             tool_result = await self._execute_state_action(name, arguments, state, step_tool_names)
-            results.append({
-                "tool": name,
-                "success": not tool_result["data"].get("error"),
-                "description": str(
-                    tool_result["data"].get("error")
-                    or tool_result["data"].get("status", "ok")
-                ),
-                **{k: v for k, v in tool_result["data"].items()
-                   if k not in ("status", "error")},
-            })
+            results.append(
+                {
+                    "tool": name,
+                    "success": not tool_result["data"].get("error"),
+                    "description": str(
+                        tool_result["data"].get("error") or tool_result["data"].get("status", "ok")
+                    ),
+                    **{
+                        k: v for k, v in tool_result["data"].items() if k not in ("status", "error")
+                    },
+                }
+            )
 
             if tool_result["stop"]:
                 break
@@ -701,7 +727,10 @@ class Agent:
         no tool calls and we need to retry.
         """
         # Pop the last user message (if it exists and is indeed a user message).
-        if self.message_manager.conversation and self.message_manager.conversation[-1].get("role") == "user":
+        if (
+            self.message_manager.conversation
+            and self.message_manager.conversation[-1].get("role") == "user"
+        ):
             self.message_manager.conversation.pop()
         self.message_manager.add_observation(state, state.get("last_screenshot_b64", ""))
 
@@ -836,9 +865,7 @@ class Agent:
         )
         memory_keys = {entry["key"] for entry in state.get("memory", [])}
         has_order_data = any(
-            kw in key
-            for key in memory_keys
-            for kw in ("order", "item", "product", "товар")
+            kw in key for key in memory_keys for kw in ("order", "item", "product", "товар")
         )
         if has_order_context and not has_order_data:
             state["phase_switch_warning"] = (

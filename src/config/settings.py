@@ -40,19 +40,17 @@ MAIN_MODEL = os.getenv("BROWSER_AGENT_MAIN_MODEL", "gpt-4o")
 VISION_MODEL = os.getenv("BROWSER_AGENT_VISION_MODEL", "gpt-4o")
 SUMMARY_MODEL = os.getenv("BROWSER_AGENT_SUMMARY_MODEL", "gpt-4o-mini")
 SECURITY_CLASSIFIER_MODEL = os.getenv("BROWSER_AGENT_SECURITY_MODEL", "gpt-4.1-nano")
-SECURITY_CLASSIFIER_USE_SCREENSHOT = _bool_env(
-    "BROWSER_AGENT_SECURITY_USE_SCREENSHOT", False
-)
+SECURITY_CLASSIFIER_USE_SCREENSHOT = _bool_env("BROWSER_AGENT_SECURITY_USE_SCREENSHOT", False)
 TEMPERATURE = _float_env("BROWSER_AGENT_TEMPERATURE", 0.1)
 
 # Per-token pricing (USD) for cost tracking.
 # Values: {"prompt": cost_per_token, "completion": cost_per_token}
 MODEL_PRICING: dict[str, dict[str, float]] = {
-    "gpt-4o":       {"prompt": 2.5e-6,  "completion": 10.0e-6},
-    "gpt-4o-mini":  {"prompt": 0.15e-6, "completion": 0.6e-6},
-    "gpt-4.1":      {"prompt": 2.0e-6,  "completion": 8.0e-6},
-    "gpt-4.1-mini": {"prompt": 0.4e-6,  "completion": 1.6e-6},
-    "gpt-4.1-nano": {"prompt": 0.1e-6,  "completion": 0.4e-6},
+    "gpt-4o": {"prompt": 2.5e-6, "completion": 10.0e-6},
+    "gpt-4o-mini": {"prompt": 0.15e-6, "completion": 0.6e-6},
+    "gpt-4.1": {"prompt": 2.0e-6, "completion": 8.0e-6},
+    "gpt-4.1-mini": {"prompt": 0.4e-6, "completion": 1.6e-6},
+    "gpt-4.1-nano": {"prompt": 0.1e-6, "completion": 0.4e-6},
 }
 
 # Browser

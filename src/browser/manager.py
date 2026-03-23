@@ -140,7 +140,9 @@ class BrowserManager:
                 try:
                     await self.page.evaluate(_ANNOTATION_REMOVE_SCRIPT)
                 except Exception as exc:
-                    logger.debug(f"Browser.take_annotated_screenshot: annotation cleanup failed: {exc}")
+                    logger.debug(
+                        f"Browser.take_annotated_screenshot: annotation cleanup failed: {exc}"
+                    )
                     pass
 
     async def navigate(self, url: str) -> dict[str, Any]:
@@ -292,8 +294,12 @@ class BrowserManager:
             page_changed = True
         elif dom_changed:
             await self._wait_for_stable(wait_for_dom_stability=True, render_buffer_ms=120)
-        elif self._should_fallback_to_href(url_before=url_before, current_url=url_after, target_href=target_href):
-            logger.info(f"Browser.click: no meaningful page change, navigating directly to href={target_href}")
+        elif self._should_fallback_to_href(
+            url_before=url_before, current_url=url_after, target_href=target_href
+        ):
+            logger.info(
+                f"Browser.click: no meaningful page change, navigating directly to href={target_href}"
+            )
             await self.page.goto(target_href, timeout=NAVIGATION_TIMEOUT_MS)
             await self._wait_for_stable(wait_for_dom_stability=True)
             url_after = self.page.url
@@ -375,7 +381,8 @@ class BrowserManager:
             await self.page.wait_for_timeout(150)
             dom_size_after = await self._capture_dom_size(self.page)
             page_changed = (
-                normalize_url_for_fingerprint(url_before) != normalize_url_for_fingerprint(self.page.url)
+                normalize_url_for_fingerprint(url_before)
+                != normalize_url_for_fingerprint(self.page.url)
                 or dom_size_before != dom_size_after
             )
             if page_changed:
@@ -399,7 +406,8 @@ class BrowserManager:
             await self.page.wait_for_timeout(150)
             dom_size_after = await self._capture_dom_size(self.page)
             page_changed = (
-                normalize_url_for_fingerprint(url_before) != normalize_url_for_fingerprint(self.page.url)
+                normalize_url_for_fingerprint(url_before)
+                != normalize_url_for_fingerprint(self.page.url)
                 or dom_size_before != dom_size_after
             )
             if page_changed:
@@ -496,7 +504,9 @@ class BrowserManager:
             render_buffer_ms=render_buffer_ms,
         )
 
-    def _center_for_element(self, element_id: int, elements: list[ElementSnapshot]) -> tuple[int, int]:
+    def _center_for_element(
+        self, element_id: int, elements: list[ElementSnapshot]
+    ) -> tuple[int, int]:
         element = self._find_element(element_id, elements)
         if element is None:
             raise ValueError(f"Element [{element_id}] not found in current observation")
@@ -508,7 +518,9 @@ class BrowserManager:
             )
         raise ValueError(f"Element [{element_id}] not found in current observation")
 
-    def _find_element(self, element_id: int, elements: list[ElementSnapshot]) -> ElementSnapshot | None:
+    def _find_element(
+        self, element_id: int, elements: list[ElementSnapshot]
+    ) -> ElementSnapshot | None:
         for element in elements:
             ref = element.get("index", element.get("ref"))
             if ref == element_id:
@@ -538,7 +550,9 @@ class BrowserManager:
                 return index
         return -1
 
-    def _should_fallback_to_href(self, *, url_before: str, current_url: str, target_href: str) -> bool:
+    def _should_fallback_to_href(
+        self, *, url_before: str, current_url: str, target_href: str
+    ) -> bool:
         if not target_href.startswith(("http://", "https://")):
             return False
         normalized_before = normalize_url_for_fingerprint(url_before)

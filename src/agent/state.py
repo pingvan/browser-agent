@@ -189,8 +189,9 @@ def append_step_history(
 def render_memory(memory: list[MemoryEntry]) -> str:
     if not memory:
         return "(memory is empty)"
-    return "\n".join(f'• {entry["key"]}: "{entry["value"]}" ({entry["source"]})' for entry in memory)
-
+    return "\n".join(
+        f'• {entry["key"]}: "{entry["value"]}" ({entry["source"]})' for entry in memory
+    )
 
 
 def append_recent_item(items: list[str], value: str, *, limit: int = 8) -> list[str]:

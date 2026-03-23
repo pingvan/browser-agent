@@ -93,15 +93,19 @@ class StepLogger:
                 key = op.get("key", "?")
                 value = op.get("value", "")[:80]
                 category = op.get("category", "data_extraction")
-                lines.append(f"  SAVE [{category}]: key=\"{key}\" value=\"{value}\"")
+                lines.append(f'  SAVE [{category}]: key="{key}" value="{value}"')
 
         if loop_warning:
             lines.extend(["", f"⚠ LOOP: {loop_warning[:140]}"])
 
         lines.extend(["", "META:"])
-        token_str = f"{prompt_tokens:,} + {completion_tokens:,} = {prompt_tokens + completion_tokens:,}"
+        token_str = (
+            f"{prompt_tokens:,} + {completion_tokens:,} = {prompt_tokens + completion_tokens:,}"
+        )
         cost_str = f"${step_cost:.4f}" if cost_known else "N/A"
-        lines.append(f"  Tokens: {token_str} | Cost: {cost_str} | Duration: {step_duration_ms / 1000:.1f}s")
+        lines.append(
+            f"  Tokens: {token_str} | Cost: {cost_str} | Duration: {step_duration_ms / 1000:.1f}s"
+        )
         cum_cost_str = f"${self.total_cost:.4f}" if cost_known else "N/A"
         lines.append(f"  Cumulative: {self.total_tokens:,} tokens | {cum_cost_str}")
         lines.append(_SEP)
@@ -143,7 +147,9 @@ class StepLogger:
         blocked_by_loop: bool = False,
     ) -> None:
         if blocked_by_loop:
-            logger.warning(f"step={step} tool={tool_name} BLOCKED (repeated action on unchanged page)")
+            logger.warning(
+                f"step={step} tool={tool_name} BLOCKED (repeated action on unchanged page)"
+            )
         elif not success:
             logger.warning(f"step={step} tool={tool_name} FAILED: {error[:120]}")
         else:
@@ -164,10 +170,7 @@ class StepLogger:
     ) -> None:
         self.memory_save_count += 1
         truncated = value[:80] + ("..." if len(value) > 80 else "")
-        logger.info(
-            f"MEMORY [{trigger_category}] step={step} "
-            f"key=\"{key}\" value=\"{truncated}\""
-        )
+        logger.info(f'MEMORY [{trigger_category}] step={step} key="{key}" value="{truncated}"')
 
     # ------------------------------------------------------------------
     # Public: phase transition warning
@@ -185,11 +188,21 @@ class StepLogger:
         if memory_saved_this_step:
             return
         text = (current_url + " " + page_title).lower()
-        data_rich_kw = ("order", "cart", "checkout", "history", "product", "заказ", "корзин", "товар", "check")
+        data_rich_kw = (
+            "order",
+            "cart",
+            "checkout",
+            "history",
+            "product",
+            "заказ",
+            "корзин",
+            "товар",
+            "check",
+        )
         if any(kw in text for kw in data_rich_kw):
             logger.warning(
                 f"PHASE SWITCH without memory save on data-rich page: "
-                f"\"{old_subtask[:60]}\" -> \"{new_subtask[:60]}\" | URL: {current_url[:80]}"
+                f'"{old_subtask[:60]}" -> "{new_subtask[:60]}" | URL: {current_url[:80]}'
             )
 
     # ------------------------------------------------------------------
@@ -211,20 +224,29 @@ class StepLogger:
                 lines.append(f"  [{i}] system: {len(str(content))} chars")
             elif role == "user":
                 if isinstance(content, list):
-                    has_img = any(p.get("type") == "image_url" for p in content if isinstance(p, dict))
-                    text_chars = sum(
-                        len(p.get("text", "")) for p in content if isinstance(p, dict) and p.get("type") == "text"
+                    has_img = any(
+                        p.get("type") == "image_url" for p in content if isinstance(p, dict)
                     )
-                    lines.append(f"  [{i}] user: text={text_chars}c{' + screenshot' if has_img else ''}")
+                    text_chars = sum(
+                        len(p.get("text", ""))
+                        for p in content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                    lines.append(
+                        f"  [{i}] user: text={text_chars}c{' + screenshot' if has_img else ''}"
+                    )
                 else:
                     lines.append(f"  [{i}] user: {len(str(content))} chars")
             elif role == "assistant":
                 if isinstance(content, str):
                     try:
                         import json as _json
+
                         data = _json.loads(content)
                         actions = [a.get("tool_name", "?") for a in data.get("action", [])]
-                        lines.append(f"  [{i}] assistant: actions=[{', '.join(actions)}] next_goal={data.get('next_goal','')[:40]!r}")
+                        lines.append(
+                            f"  [{i}] assistant: actions=[{', '.join(actions)}] next_goal={data.get('next_goal', '')[:40]!r}"
+                        )
                     except Exception:
                         lines.append(f"  [{i}] assistant: {len(content)} chars")
             else:
@@ -316,6 +338,7 @@ class StepLogger:
 # ------------------------------------------------------------------
 # Module-level helper
 # ------------------------------------------------------------------
+
 
 def _wrap(text: str, width: int, indent: str) -> list[str]:
     """Word-wrap text into lines of at most `width` chars with leading `indent`."""

@@ -101,7 +101,9 @@ class SecurityGate:
         print(f"\n{border}")
         print(f"  [{risk_label} RISK] Confirmation Required  (step {step})")
         print(border)
-        print(f"  {verdict.user_facing_message or 'The agent wants to perform a sensitive action. Allow?'}")
+        print(
+            f"  {verdict.user_facing_message or 'The agent wants to perform a sensitive action. Allow?'}"
+        )
         print(f"\n  Category: {verdict.category}")
         print(f"  Reason: {verdict.reason}")
         print(border)

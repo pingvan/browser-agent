@@ -33,7 +33,9 @@ class MessageManager:
     def add_observation(self, state: AgentState, screenshot_b64: str = "") -> None:
         """Append a user message with the current page observation (used for initial step)."""
         text = self._build_observation_text(state)
-        self.conversation.append({"role": "user", "content": self._build_content(text, screenshot_b64)})
+        self.conversation.append(
+            {"role": "user", "content": self._build_content(text, screenshot_b64)}
+        )
 
     def add_agent_output(self, output: AgentOutput) -> None:
         """Append an assistant message with the structured JSON output."""
@@ -62,7 +64,9 @@ class MessageManager:
         result_summary = "## Action Results\n" + "\n".join(result_lines) if result_lines else ""
         obs_text = self._build_observation_text(state)
         text = (result_summary + "\n\n" + obs_text).strip()
-        self.conversation.append({"role": "user", "content": self._build_content(text, screenshot_b64)})
+        self.conversation.append(
+            {"role": "user", "content": self._build_content(text, screenshot_b64)}
+        )
 
     # ------------------------------------------------------------------
     # Public: build final messages list for the API call
@@ -125,14 +129,14 @@ class MessageManager:
         # Rebuild: pinned task reminder → summary → recent cycles.
         self.conversation = []
         if task:
-            self.conversation.append({
-                "role": "user",
-                "content": (
-                    "YOUR TASK (never lose track of this):\n"
-                    f"{task}\n"
-                    "Execute this task."
-                ),
-            })
+            self.conversation.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"YOUR TASK (never lose track of this):\n{task}\nExecute this task."
+                    ),
+                }
+            )
         elif existing_pinned is not None:
             self.conversation.append(existing_pinned)
         self.conversation.append(summary_message)
@@ -167,7 +171,9 @@ class MessageManager:
         # Forced instruction (escalating retry nudge) — prepended before everything else.
         forced = state.get("forced_instruction", "")
         if forced:
-            sections.extend(["!! SYSTEM INSTRUCTION !!", forced, "!! END SYSTEM INSTRUCTION !!", ""])
+            sections.extend(
+                ["!! SYSTEM INSTRUCTION !!", forced, "!! END SYSTEM INSTRUCTION !!", ""]
+            )
             state["forced_instruction"] = ""  # show once
 
         # Task — always first and most prominent so the model treats it as a command.
@@ -218,16 +224,18 @@ class MessageManager:
             sections.extend(["", "## ⚠ Loop Warning", stuck_hint])
 
         if state.get("overlay_click_blocked"):
-            sections.extend([
-                "",
-                "## !! OVERLAY BLOCKING CLICKS",
-                "Your last click was blocked because an overlay/popup/modal is covering the page.",
-                "You MUST handle the overlay first:",
-                "  - Look at the screenshot for cookie consent, popup, or modal",
-                "  - Find and click the accept/close/dismiss button",
-                "  - Or try press_key('Escape')",
-                "  - Do NOT try to click elements behind the overlay",
-            ])
+            sections.extend(
+                [
+                    "",
+                    "## !! OVERLAY BLOCKING CLICKS",
+                    "Your last click was blocked because an overlay/popup/modal is covering the page.",
+                    "You MUST handle the overlay first:",
+                    "  - Look at the screenshot for cookie consent, popup, or modal",
+                    "  - Find and click the accept/close/dismiss button",
+                    "  - Or try press_key('Escape')",
+                    "  - Do NOT try to click elements behind the overlay",
+                ]
+            )
 
         phase_switch_warning = state.get("phase_switch_warning", "")
         if phase_switch_warning:
@@ -275,7 +283,9 @@ class MessageManager:
         if msg.get("role") != "user":
             return False
         content = msg.get("content", "")
-        return isinstance(content, str) and content.startswith("YOUR TASK (never lose track of this):")
+        return isinstance(content, str) and content.startswith(
+            "YOUR TASK (never lose track of this):"
+        )
 
     def _extract_action_from_cycle(self, cycle: list[dict[str, Any]]) -> str:
         """Build a rich one-line summary from a conversation cycle (new JSON format)."""

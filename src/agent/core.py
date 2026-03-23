@@ -586,6 +586,13 @@ class Agent:
                         state["overlay_click_blocked"] = True
                         element_id = arguments.get("element_id")
                         state["overlay_blocked_element"] = int(element_id) if element_id is not None else None
+                    elif result.get("disabled") or "disabled" in description or "not enabled" in error_text:
+                        self._set_stuck_hint(
+                            state,
+                            "The control you tried to use is disabled or not ready yet. "
+                            "Do NOT treat this subtask as complete. Wait for the UI to enable it, "
+                            "or take a different action that makes it available.",
+                        )
                 break
 
             # State action.

@@ -47,10 +47,19 @@ class MessageManager:
         screenshot_b64: str = "",
     ) -> None:
         """Append a user message combining action results with page observation."""
-        result_lines = [
-            f"- {r['tool']}: {'OK' if r.get('success') else 'FAILED'}. {str(r.get('description', ''))[:150]}"
-            for r in results
-        ]
+        result_lines = []
+        for result in results:
+            description = str(result.get("description", "")).strip()[:150]
+            notes: list[str] = []
+            if result.get("success") and result.get("page_changed") is False:
+                notes.append("no visible page change")
+            if result.get("disabled"):
+                notes.append("target disabled")
+            if notes:
+                description = f"{description} ({'; '.join(notes)})"
+            result_lines.append(
+                f"- {result['tool']}: {'OK' if result.get('success') else 'FAILED'}. {description}"
+            )
         result_summary = "## Action Results\n" + "\n".join(result_lines) if result_lines else ""
         obs_text = self._build_observation_text(state)
         text = (result_summary + "\n\n" + obs_text).strip()

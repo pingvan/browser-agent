@@ -183,6 +183,21 @@ class BrowserManager:
         dom_size_before = await self._capture_dom_size(self.page)
         pages_before = len(self.context.pages)
         target_href = str(target.get("href", ""))
+        if target.get("disabled"):
+            logger.info(
+                f"Browser.click: element_id={element_id} is disabled, returning failure without fallback"
+            )
+            return self._build_action_failure(
+                description=(
+                    f"Element [{element_id}] is disabled and cannot be clicked yet. "
+                    "Wait for the UI to enable it or choose a different action."
+                ),
+                error="target element is disabled",
+                url_before=url_before,
+                url_after=self.page.url,
+                target_href=target_href,
+                disabled=True,
+            )
         logger.info(
             f"Browser.click: element_id={element_id}, href={target_href or '(none)'}, pages_before={pages_before}"
         )
@@ -192,7 +207,38 @@ class BrowserManager:
             await locator.click(timeout=5000, no_wait_after=True)
         except Exception as exc:
             message = str(exc)
+            if self._is_disabled_interaction_error(message):
+                logger.info(
+                    "Browser.click: locator click failed because the target is disabled or not ready; "
+                    f"element_id={element_id}"
+                )
+                return self._build_action_failure(
+                    description=(
+                        f"Element [{element_id}] is disabled or not currently clickable. "
+                        "Wait for the UI to enable it or choose a different action."
+                    ),
+                    error=message,
+                    url_before=url_before,
+                    url_after=self.page.url,
+                    target_href=target_href,
+                    disabled=True,
+                )
             if "intercepts pointer events" in message.lower():
+                if await self._has_active_overlay_surface():
+                    logger.info(
+                        f"Browser.click: click intercepted for element [{element_id}] while overlay/listbox "
+                        "is active, returning failure instead of navigating to href"
+                    )
+                    return self._build_action_failure(
+                        description=(
+                            "Click blocked by overlay, popup, or active listbox. "
+                            "Inspect and interact with the topmost UI first."
+                        ),
+                        error=message,
+                        url_before=url_before,
+                        url_after=self.page.url,
+                        target_href=target_href,
+                    )
                 if target_href.startswith(("http://", "https://")):
                     logger.info(
                         "Browser.click: click blocked by overlay/intercept, navigating directly to href="
@@ -271,8 +317,25 @@ class BrowserManager:
         *,
         press_enter: bool = False,
     ) -> dict[str, Any]:
+        target = self._find_element(element_id, elements)
+        if target is None:
+            raise ValueError(f"Element [{element_id}] not found in current observation")
         url_before = self.page.url
         dom_size_before = await self._capture_dom_size(self.page)
+        if target.get("disabled"):
+            logger.info(
+                f"Browser.type_text: element_id={element_id} is disabled, returning failure without fallback"
+            )
+            return self._build_action_failure(
+                description=(
+                    f"Element [{element_id}] is disabled and cannot accept text input yet. "
+                    "Wait for the UI to enable it or choose a different action."
+                ),
+                error="target element is disabled",
+                url_before=url_before,
+                url_after=self.page.url,
+                disabled=True,
+            )
         logger.info(
             f"Browser.type_text: element_id={element_id}, chars={len(text)}, press_enter={press_enter}"
         )
@@ -281,6 +344,22 @@ class BrowserManager:
             await locator.wait_for(state="visible", timeout=1500)
             await locator.fill(text, timeout=5000)
         except Exception as exc:
+            message = str(exc)
+            if self._is_disabled_interaction_error(message):
+                logger.info(
+                    "Browser.type_text: locator fill failed because the target is disabled or not editable; "
+                    f"element_id={element_id}"
+                )
+                return self._build_action_failure(
+                    description=(
+                        f"Element [{element_id}] is disabled or not ready for text input. "
+                        "Wait for the UI to enable it or choose a different action."
+                    ),
+                    error=message,
+                    url_before=url_before,
+                    url_after=self.page.url,
+                    disabled=True,
+                )
             x, y = self._center_for_element(element_id, elements)
             logger.debug(
                 f"Browser.type_text: locator fill failed, falling back to coordinates ({x}, {y}): {exc}"
@@ -467,6 +546,40 @@ class BrowserManager:
         normalized_target = normalize_url_for_fingerprint(target_href)
         return normalized_current == normalized_before and normalized_target != normalized_before
 
+    async def _has_active_overlay_surface(self) -> bool:
+        try:
+            return bool(
+                await self.page.evaluate(
+                    """
+                    () => {
+                        const selectors = [
+                            '[role="dialog"]',
+                            '[role="alertdialog"]',
+                            '[role="listbox"]',
+                            '[role="menu"]',
+                            '[aria-modal="true"]'
+                        ];
+                        const isVisible = (el) => {
+                            if (!(el instanceof Element)) return false;
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width < 5 || rect.height < 5) return false;
+                            const style = getComputedStyle(el);
+                            if (style.visibility === 'hidden' || style.display === 'none') return false;
+                            return rect.bottom >= 0
+                                && rect.right >= 0
+                                && rect.top <= window.innerHeight
+                                && rect.left <= window.innerWidth;
+                        };
+                        return selectors.some((selector) =>
+                            Array.from(document.querySelectorAll(selector)).some(isVisible)
+                        );
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
     def _build_action_result(
         self,
         *,
@@ -488,6 +601,44 @@ class BrowserManager:
             "tab_index": self._current_tab_index() if tab_index is None else tab_index,
             "target_href": target_href,
         }
+
+    def _build_action_failure(
+        self,
+        *,
+        description: str,
+        error: str,
+        url_before: str,
+        url_after: str,
+        page_changed: bool = False,
+        opened_new_tab: bool = False,
+        target_href: str = "",
+        tab_index: int | None = None,
+        disabled: bool = False,
+    ) -> dict[str, Any]:
+        result = {
+            "success": False,
+            "description": description,
+            "error": error,
+            "url_before": url_before,
+            "url_after": url_after,
+            "page_changed": page_changed,
+            "opened_new_tab": opened_new_tab,
+            "tab_index": self._current_tab_index() if tab_index is None else tab_index,
+            "target_href": target_href,
+        }
+        if disabled:
+            result["disabled"] = True
+        return result
+
+    def _is_disabled_interaction_error(self, message: str) -> bool:
+        lowered = message.lower()
+        disabled_markers = (
+            "element is not enabled",
+            "element is disabled",
+            "not editable",
+            "readonly",
+        )
+        return any(marker in lowered for marker in disabled_markers)
 
     def _to_snapshot(self, element: InteractiveElement) -> ElementSnapshot:
         snapshot = ElementSnapshot(**asdict(element))

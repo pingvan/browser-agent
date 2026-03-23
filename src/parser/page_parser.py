@@ -47,6 +47,7 @@ class PageStateWithScreenshot:
 _JS_EXTRACT_ELEMENTS = """
 () => {
     const selectors = [
+        '[role="option"]', '[role="listbox"]',
         'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
         '[role="button"]', '[role="link"]', '[role="menuitem"]',
         '[role="tab"]', '[role="checkbox"]', '[role="radio"]',

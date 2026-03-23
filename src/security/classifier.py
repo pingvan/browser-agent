@@ -6,6 +6,7 @@ from typing import Any, cast
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
+from openai.types.shared_params.response_format_json_schema import ResponseFormatJSONSchema
 
 from src.config.settings import (
     MODEL_PRICING,
@@ -160,17 +161,14 @@ class SecurityClassifier:
             messages.append({"role": "user", "content": user_content})
 
         try:
+            response_format: ResponseFormatJSONSchema = {
+                "type": "json_schema",
+                "json_schema": SecurityVerdict.to_json_schema(),
+            }
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=cast(list[ChatCompletionMessageParam], messages),
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "security_verdict",
-                        "strict": True,
-                        "schema": SecurityVerdict.model_json_schema(),
-                    },
-                },
+                response_format=response_format,
                 temperature=0,
                 max_tokens=300,
             )

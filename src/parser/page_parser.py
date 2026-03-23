@@ -23,6 +23,7 @@ class InteractiveElement:
     aria_label: str
     placeholder: str
     href: str
+    name: str
     input_type: str
     value: str
     disabled: bool
@@ -90,6 +91,7 @@ _JS_EXTRACT_ELEMENTS = """
                 aria_label: el.getAttribute('aria-label') || '',
                 placeholder: el.getAttribute('placeholder') || '',
                 href: absHref,
+                name: el.getAttribute('name') || '',
                 input_type: el.getAttribute('type') || '',
                 value: (el.value !== undefined ? String(el.value) : '').slice(0, 50),
                 disabled: el.disabled === true || el.getAttribute('disabled') !== null,
@@ -210,6 +212,7 @@ async def extract_page_state(page: Page) -> PageState:
             aria_label=e["aria_label"],
             placeholder=e["placeholder"],
             href=e["href"],
+            name=e["name"],
             input_type=e["input_type"],
             value=e["value"],
             disabled=e["disabled"],

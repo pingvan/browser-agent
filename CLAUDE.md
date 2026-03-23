@@ -12,15 +12,31 @@ AI-агент, который управляет видимым браузеро
 
 ```
 User CLI
-  -> Agent
-     -> MessageManager
-     -> OpenAI tool-calling decision
-     -> ToolRegistry / local validation
-     -> BrowserManager
-     -> Page parser / DOM extraction
-     -> PageSummarizer (sidecar, cache-backed)
-     -> LoopDetector / SecurityLayer
+  -> Agent (core.py)
+     -> MessageManager          # multi-turn conversation accumulator
+     -> OpenAI tool-calling     # native multi-turn with tool messages
+     -> ToolRegistry            # tool schema + local validation
+     -> BrowserManager          # browser execution layer
+     -> Page parser / DOM       # DOM/text extraction
+     -> PageSummarizer          # sidecar page compression (not integrated)
+     -> LoopDetector            # local anti-loop hints
+     -> SecurityLayer           # risky-action confirmation
 ```
+
+### Message Flow (per step)
+
+Each LLM call receives a full multi-turn conversation:
+```
+[system]    System prompt (static, includes guardrails)
+[user]      Observation step 1 (text + screenshot)
+[assistant] Tool calls step 1
+[tool]      Results step 1
+[user]      Observation step 2
+...
+[user]      Current observation
+```
+
+MessageManager accumulates messages via `add_observation()`, `add_assistant_tool_calls()`, `add_tool_result()`. Old steps are compressed when context grows large.
 
 ## Runtime Rules
 
@@ -34,14 +50,17 @@ User CLI
 
 ## Core Modules
 
-1. `src/agent/core.py` — `Agent` runtime и `run_agent()`
-2. `src/agent/message_manager.py` — сборка prompt context
+1. `src/agent/core.py` — `Agent` runtime: run loop, _observe(), _decide(), _execute_tool_calls()
+2. `src/agent/message_manager.py` — multi-turn conversation accumulator with compression
 3. `src/agent/tool_registry.py` — tool schema + local validation
-4. `src/agent/page_summarizer.py` — sidecar page compression
-5. `src/agent/loop_detector.py` — local anti-loop hints
-6. `src/browser/manager.py` — browser execution layer
-7. `src/parser/page_parser.py` — DOM/text extraction
-8. `src/security/security_layer.py` — risky-action confirmation и prompt-injection warnings
+4. `src/agent/page_summarizer.py` — sidecar page compression (not integrated into core)
+5. `src/agent/loop_detector.py` — local anti-loop hints (AAA, ABAB, page oscillation)
+6. `src/agent/state.py` — AgentState TypedDict, state mutation helpers, fingerprinting
+7. `src/agent/prompts.py` — system prompts (main agent, page summarizer, DOM inspector)
+8. `src/agent/inspection.py` — DomInspector (separate LLM call for DOM questions)
+9. `src/browser/manager.py` — browser execution layer (Playwright)
+10. `src/parser/page_parser.py` — DOM/text extraction
+11. `src/security/security_layer.py` — risky-action confirmation и prompt-injection warnings
 
 ## Commands
 

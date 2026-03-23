@@ -30,6 +30,7 @@ class ElementSnapshot(TypedDict, total=False):
     aria_label: str
     placeholder: str
     href: str
+    name: str
     input_type: str
     value: str
     disabled: bool

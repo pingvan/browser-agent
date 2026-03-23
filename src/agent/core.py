@@ -18,6 +18,7 @@ from src.agent.prompts import MAIN_AGENT_SYSTEM_PROMPT
 from src.agent.schema import AgentOutput
 from src.agent.state import (
     AgentState,
+    ElementSnapshot,
     InspectionResult,
     append_recent_item,
     append_step_history,
@@ -38,6 +39,8 @@ from src.config.settings import (
     get_openai_api_key,
 )
 from src.parser.page_parser import PageState
+from src.security.classifier import SecurityClassifier
+from src.security.gate import SecurityGate
 from src.security.security_layer import SecurityLayer
 from src.utils.logger import logger
 
@@ -79,6 +82,8 @@ class Agent:
         browser: Any | None = None,
         client: Any | None = None,
         security_layer: SecurityLayer | None = None,
+        security_classifier: SecurityClassifier | None = None,
+        security_gate: SecurityGate | None = None,
         dom_inspector: DomInspector | None = None,
         message_manager: MessageManager | None = None,
         tool_registry: ToolRegistry | None = None,
@@ -93,6 +98,18 @@ class Agent:
         self.browser = browser
         self.client = client
         self.security_layer = security_layer or SecurityLayer()
+        if security_gate is not None:
+            self.security_gate = security_gate
+            self.security_classifier = security_classifier or security_gate.classifier
+        elif security_classifier is not None:
+            self.security_classifier = security_classifier
+            self.security_gate = SecurityGate(classifier=security_classifier)
+        elif client is not None:
+            self.security_classifier = SecurityClassifier(client=client)
+            self.security_gate = SecurityGate(classifier=self.security_classifier)
+        else:
+            self.security_classifier = None
+            self.security_gate = None
         self.dom_inspector = dom_inspector or DomInspector(client)
         self.message_manager = message_manager or MessageManager()
         self.tool_registry = tool_registry or ToolRegistry()
@@ -275,6 +292,10 @@ class Agent:
             status=state.get("status", "error"),
             steps=state.get("step_count", 0),
         )
+        if self.security_gate is not None:
+            logger.info(self.security_gate.get_summary())
+        if self.security_classifier is not None:
+            logger.info(self.security_classifier.summary())
 
         if state.get("status") == "done":
             logger.info(
@@ -731,19 +752,44 @@ class Agent:
             elements=[],
         )
 
+    def _find_interactive_element(
+        self, state: AgentState, element_id: Any
+    ) -> ElementSnapshot | None:
+        if not isinstance(element_id, int):
+            return None
+        for element in state.get("interactive_elements", []):
+            if element.get("index", element.get("ref")) == element_id:
+                return element
+        return None
+
     async def _execute_browser_action(
         self,
         name: str,
         arguments: dict[str, Any],
         state: AgentState,
     ) -> dict[str, Any]:
-        observation_page_state = await self.browser.observe(capture_screenshot=False)
-        if self.security_layer.is_dangerous(name, arguments, observation_page_state.page_state):
-            allowed = await self.security_layer.request_confirmation(name, arguments)
+        element_info = self._find_interactive_element(state, arguments.get("element_id"))
+        if self.security_gate is not None:
+            allowed, verdict = await self.security_gate.check(
+                action_name=name,
+                arguments=arguments,
+                element_info=element_info,
+                page_url=state.get("current_url", ""),
+                page_title=state.get("page_title", ""),
+                page_text_excerpt=state.get("page_text_excerpt", ""),
+                prompt_injection_warnings=state.get("prompt_injection_warnings", []),
+                user_task=state.get("task", ""),
+                screenshot_b64=state.get("last_screenshot_b64", ""),
+                step=state.get("step_count", 0),
+            )
             if not allowed:
                 return {
                     "success": False,
-                    "description": "Action rejected by the user",
+                    "description": (
+                        f"Action blocked by security: "
+                        f"{verdict.reason if verdict else 'user denied'}"
+                    ),
+                    "error": verdict.reason if verdict else "security gate blocked the action",
                     "page_changed": False,
                     "url_before": state.get("current_url", ""),
                     "url_after": state.get("current_url", ""),

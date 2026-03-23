@@ -27,11 +27,22 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # LLM
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MAIN_MODEL = os.getenv("BROWSER_AGENT_MAIN_MODEL", "gpt-4o")
 VISION_MODEL = os.getenv("BROWSER_AGENT_VISION_MODEL", "gpt-4o")
 SUMMARY_MODEL = os.getenv("BROWSER_AGENT_SUMMARY_MODEL", "gpt-4o-mini")
+SECURITY_CLASSIFIER_MODEL = os.getenv("BROWSER_AGENT_SECURITY_MODEL", "gpt-4.1-nano")
+SECURITY_CLASSIFIER_USE_SCREENSHOT = _bool_env(
+    "BROWSER_AGENT_SECURITY_USE_SCREENSHOT", False
+)
 TEMPERATURE = _float_env("BROWSER_AGENT_TEMPERATURE", 0.1)
 
 # Per-token pricing (USD) for cost tracking.

@@ -7,6 +7,14 @@ from playwright.async_api import Page
 
 
 @dataclass
+class BBox:
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+@dataclass
 class InteractiveElement:
     ref: int
     tag: str
@@ -15,9 +23,11 @@ class InteractiveElement:
     aria_label: str
     placeholder: str
     href: str
+    name: str
     input_type: str
     value: str
     disabled: bool
+    bbox: BBox | None = None
 
 
 @dataclass
@@ -37,10 +47,12 @@ class PageStateWithScreenshot:
 _JS_EXTRACT_ELEMENTS = """
 () => {
     const selectors = [
-        'a[href]', 'button', 'input', 'select', 'textarea',
-        '[role="button"]', '[role="link"]', '[role="tab"]',
-        '[role="menuitem"]', '[role="checkbox"]', '[role="radio"]',
-        '[onclick]', '[tabindex]:not([tabindex="-1"])', 'summary'
+        '[role="option"]', '[role="listbox"]',
+        'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
+        '[role="button"]', '[role="link"]', '[role="menuitem"]',
+        '[role="tab"]', '[role="checkbox"]', '[role="radio"]',
+        '[role="switch"]', '[role="combobox"]', '[role="searchbox"]',
+        '[onclick]', '[tabindex="0"]', 'summary', 'label[for]'
     ];
     const seen = new Set();
     const results = [];
@@ -58,15 +70,16 @@ _JS_EXTRACT_ELEMENTS = """
             seen.add(el);
 
             const rect = el.getBoundingClientRect();
-            if (rect.width === 0) continue;
+            if (rect.width < 5 || rect.height < 5) continue;
             const style = getComputedStyle(el);
             if (style.visibility === 'hidden' || style.display === 'none') continue;
-            if (rect.top > window.innerHeight + 500 || rect.bottom < -500) continue;
+            if (rect.top > window.innerHeight || rect.bottom < 0) continue;
+            if (rect.left > window.innerWidth || rect.right < 0) continue;
 
             el.dataset.agentRef = String(ref);
 
-            const text = (el.textContent || '').trim().slice(0, 80);
-            const href = (el.getAttribute('href') || '').slice(0, 120);
+            const text = (el.textContent || '').trim().slice(0, 200);
+            const href = (el.getAttribute('href') || '').slice(0, 200);
             const absHref = href
                 ? (() => { try { return new URL(href, location.href).href; } catch { return href; } })()
                 : '';
@@ -79,9 +92,16 @@ _JS_EXTRACT_ELEMENTS = """
                 aria_label: el.getAttribute('aria-label') || '',
                 placeholder: el.getAttribute('placeholder') || '',
                 href: absHref,
+                name: el.getAttribute('name') || '',
                 input_type: el.getAttribute('type') || '',
                 value: (el.value !== undefined ? String(el.value) : '').slice(0, 50),
                 disabled: el.disabled === true || el.getAttribute('disabled') !== null,
+                bbox: {
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                },
             });
             ref++;
             if (results.length >= 150) break;
@@ -193,9 +213,20 @@ async def extract_page_state(page: Page) -> PageState:
             aria_label=e["aria_label"],
             placeholder=e["placeholder"],
             href=e["href"],
+            name=e["name"],
             input_type=e["input_type"],
             value=e["value"],
             disabled=e["disabled"],
+            bbox=(
+                BBox(
+                    x=e["bbox"]["x"],
+                    y=e["bbox"]["y"],
+                    width=e["bbox"]["width"],
+                    height=e["bbox"]["height"],
+                )
+                if e.get("bbox")
+                else None
+            ),
         )
         for e in raw_elements
     ]
@@ -209,9 +240,9 @@ async def extract_page_state(page: Page) -> PageState:
     return PageState(url=url, title=title, content=content, elements=elements)
 
 
-async def _take_screenshot(page: Page) -> str:
+async def take_screenshot(page: Page, quality: int = 65) -> str:
     try:
-        data = await page.screenshot(type="jpeg", quality=35, full_page=False)
+        data = await page.screenshot(type="jpeg", quality=quality, full_page=False)
     except Exception:
         return ""
     return base64.b64encode(data).decode("utf-8")
@@ -220,6 +251,6 @@ async def _take_screenshot(page: Page) -> str:
 async def extract_page_state_with_screenshot(page: Page) -> PageStateWithScreenshot:
     page_state, screenshot_b64 = await asyncio.gather(
         extract_page_state(page),
-        _take_screenshot(page),
+        take_screenshot(page),
     )
     return PageStateWithScreenshot(page_state=page_state, screenshot_b64=screenshot_b64)

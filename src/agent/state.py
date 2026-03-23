@@ -7,7 +7,6 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from src.config.settings import (
-    ACTION_HISTORY_WINDOW,
     MAX_MEMORY_ENTRIES,
     MAX_MEMORY_VALUE_LENGTH,
 )
@@ -51,13 +50,6 @@ class StepRecord(TypedDict, total=False):
     page_changed: bool
 
 
-class StepPacket(TypedDict, total=False):
-    step_eval: Literal["success", "partial", "blocked", "failed"]
-    decision_note: str
-    memory_candidate: str
-    next_goal: str
-
-
 class InspectionCandidate(TypedDict):
     element_id: int
     reason: str
@@ -84,7 +76,6 @@ class AgentState(TypedDict, total=False):
 
     memory: list[MemoryEntry]
     step_history: list[StepRecord]
-    last_step_packet: StepPacket
     last_dom_inspection: InspectionResult
 
     current_url: str
@@ -101,6 +92,7 @@ class AgentState(TypedDict, total=False):
     last_action_signature: str
     last_action_fingerprint: str
     recent_action_signatures: list[str]
+    recent_browser_actions: list[str]
 
     retry_count: int
     invalid_tool_calls: int
@@ -108,7 +100,18 @@ class AgentState(TypedDict, total=False):
     consecutive_stuck_steps: int
     last_error: str
     stuck_hint: str
+    phase_switch_warning: str
     prompt_injection_warnings: list[str]
+
+    overlay_click_blocked: bool
+    overlay_blocked_element: int | None
+
+    parse_failure_count: int
+    forced_instruction: str
+
+    last_evaluation: str
+    last_reasoning_memory: str
+    last_next_goal: str
 
     user_response: str | None
     final_report: str
@@ -122,12 +125,6 @@ def create_initial_state(task: str) -> AgentState:
         status="running",
         memory=[],
         step_history=[],
-        last_step_packet=StepPacket(
-            step_eval="partial",
-            decision_note="",
-            memory_candidate="",
-            next_goal="",
-        ),
         last_dom_inspection=InspectionResult(
             question="",
             answer="",
@@ -149,13 +146,22 @@ def create_initial_state(task: str) -> AgentState:
         last_action_signature="",
         last_action_fingerprint="",
         recent_action_signatures=[],
+        recent_browser_actions=[],
         retry_count=0,
         invalid_tool_calls=0,
         consecutive_failures=0,
         consecutive_stuck_steps=0,
         last_error="",
         stuck_hint="",
+        phase_switch_warning="",
         prompt_injection_warnings=[],
+        overlay_click_blocked=False,
+        overlay_blocked_element=None,
+        parse_failure_count=0,
+        forced_instruction="",
+        last_evaluation="",
+        last_reasoning_memory="",
+        last_next_goal="",
         user_response=None,
         final_report="",
         step_count=0,
@@ -207,20 +213,6 @@ def render_memory(memory: list[MemoryEntry]) -> str:
         return "(memory is empty)"
     return "\n".join(f'• {entry["key"]}: "{entry["value"]}" ({entry["source"]})' for entry in memory)
 
-
-def render_recent_history(history: list[StepRecord]) -> str:
-    if not history:
-        return "(no actions yet)"
-
-    recent = history[-ACTION_HISTORY_WINDOW:]
-    lines = []
-    for entry in recent:
-        verdict = "✓" if entry.get("success", False) else "✗"
-        changed = " changed" if entry.get("page_changed", False) else ""
-        lines.append(
-            f"[{verdict}] step {entry.get('step', '?')}: {entry.get('action', '')}{changed} -> {entry.get('result', '')}"
-        )
-    return "\n".join(lines)
 
 
 def append_recent_item(items: list[str], value: str, *, limit: int = 8) -> list[str]:
